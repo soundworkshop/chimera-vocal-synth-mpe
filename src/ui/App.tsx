@@ -51,9 +51,9 @@ function RecordButton() {
     if (rec) return rec.stop();
     setNote(null);
     try {
-      const r = await startRecording(({ file, error }) => {
+      const r = await startRecording(({ file, error, warning }) => {
         setRec(null);
-        setNote(error ?? `Saved ${file} to Downloads`);
+        setNote(error ?? warning ?? `Saved ${file} to Downloads`);
       });
       setSecs(0);
       setRec(r);
