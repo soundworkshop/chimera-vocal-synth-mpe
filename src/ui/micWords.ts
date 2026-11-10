@@ -13,7 +13,7 @@ import { MicInput, listInputs } from "../audio/micInput.ts";
 import { VoiceGate } from "../audio/voiceGate.ts";
 import { ConsonantDetector } from "../audio/consonants.ts";
 import { hissGestures, stopGestures } from "./consonantGestures.ts";
-import { analyzeFormants, applyCalibration, fitCalibration, IDENTITY_CALIBRATION, median, type FormantCalibration } from "../audio/formants.ts";
+import { analyzeFormants, applyCalibration, fitCalibration, FormantFollower, IDENTITY_CALIBRATION, median, type FormantCalibration } from "../audio/formants.ts";
 import { useStore } from "./store.ts";
 import { getModel } from "./useModel.ts";
 
@@ -89,7 +89,7 @@ let waitTimer: ReturnType<typeof setTimeout> | undefined;
 let raf = 0;
 let lastT = 0;
 /** smoothed log formants (model space) */
-let s1 = 0, s2 = 0;
+const follower = new FormantFollower();
 
 /** "ee", "ah", "oo": the corners of the vowel space, as the model's calibrated vowels */
 const STEPS = [
@@ -136,7 +136,7 @@ export const useMic = create<MicState>((set, get) => ({
         if (attempt !== mine) return void mic.close();
         clearTimeout(waitTimer);
         set({ status: "on", problem: null, inputs: await listInputs() });
-        s1 = s2 = 0;
+        follower.reset();
         voiceGate.reset();
         consonants.reset();
         lastT = performance.now();
@@ -225,18 +225,16 @@ function tick(): void {
       } else engine.scheduleGestures(stopGestures(e.ipa, st.body));
       if (e.type !== "hissEnd") (micLive.consonant = e.ipa), (micLive.consonantAt = now);
     }
-    // a hiss's or a burst's formants are noise: the vowel holds meanwhile
-    if (consonants.hissing || consonants.recentStop) return;
   } else endHiss();
-  if (!voiced) return;
-  const t = applyCalibration(r.f1, r.f2, m.calibration);
-  const l1 = Math.log(t.f1), l2 = Math.log(t.f2);
-  // one-pole smoothing in log Hz; a fresh start (or a long silence) jumps straight there
-  const a = 1 - Math.exp(-dt / Math.max(0.001, m.smooth / 1000));
-  if (s1 === 0) (s1 = l1), (s2 = l2);
-  else (s1 += a * (l1 - s1)), (s2 += a * (l2 - s2));
+  // a hiss's or a burst's formants are noise: the vowel holds meanwhile
+  const consonant = m.consonants && (consonants.hissing || consonants.recentStop);
+  // confidence: full near the current speaking level, little at the edges of words
+  const confidence = Math.min(1, Math.max(0.1, (r.db - (voiceGate.peak - 12)) / 8));
+  const v = follower.update(r, voiced && !consonant, confidence, dt, m.smooth / 1000);
+  if (!v) return;
+  const t = applyCalibration(v.f1, v.f2, m.calibration);
   const model = getModel(st.body, ctx.sampleRate);
-  st.setArtic(model.articForFormants(Math.exp(s1), Math.exp(s2)), true);
+  st.setArtic(model.articForFormants(t.f1, t.f2), true);
 }
 
 function calibrateStep(voiced: boolean, f1: number, f2: number): void {
@@ -263,5 +261,5 @@ function calibrateStep(voiced: boolean, f1: number, f2: number): void {
   }
   useMic.getState().set({ calibration: fitCalibration(got, target) });
   useMic.setState({ prompt: null, calibrated: true });
-  s1 = s2 = 0;
+  follower.reset();
 }

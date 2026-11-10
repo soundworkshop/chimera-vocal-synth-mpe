@@ -296,3 +296,35 @@ test("consonant gestures: a hiss owns its constriction until released, a stop cl
   const k = stopGestures("k", male).find((g) => g.strength === 40)!;
   expect(k.targets.tbY).toBeCloseTo(8.35, 2);
 });
+
+test("formant follower: continuity, outliers, quiet edges and fresh starts", async () => {
+  const { FormantFollower, pickFormants } = await import("../src/audio/formants.ts");
+  const fr = (...fs: number[]) => ({ f1: 0, f2: 0, db: -30, candidates: fs.map((f) => ({ f, bw: 80 })) });
+  // a stray resonance between F1 and F2: the lowest-pick takes it, continuity doesn't
+  expect(pickFormants(fr(700, 900, 1150).candidates, 0, 0).f2).toBe(900);
+  expect(pickFormants(fr(700, 900, 1150).candidates, 700, 1150).f2).toBe(1150);
+
+  const dt = 1 / 60, tau = 0.03;
+  const f = new FormantFollower();
+  // a phrase starts: an onset frame of junk, then two that agree → straight to "ah"
+  expect(f.update(fr(400, 2600), true, 0.3, dt, tau)).toBe(null);
+  expect(f.update(fr(730, 1100), true, 1, dt, tau)).toBe(null);
+  const start = f.update(fr(735, 1105), true, 1, dt, tau)!;
+  expect(start.f1).toBeCloseTo(732, -1);
+  // one wild frame (F2 jumps to F3) barely moves it: the median of three
+  for (let i = 0; i < 5; i++) f.update(fr(730, 1100), true, 1, dt, tau);
+  const before = f.update(fr(730, 1100), true, 1, dt, tau)!;
+  const wild = f.update(fr(730, 2450), true, 1, dt, tau)!;
+  expect(Math.abs(Math.log(wild.f2 / before.f2))).toBeLessThan(0.01);
+  // quiet frames (a fading edge) toward "ee" move it far less than full-voice ones
+  const g = new FormantFollower(), h = new FormantFollower();
+  for (const x of [g, h]) for (let i = 0; i < 4; i++) x.update(fr(730, 1100), true, 1, dt, tau);
+  let quiet = { f1: 0, f2: 0 }, loud = { f1: 0, f2: 0 };
+  for (let i = 0; i < 3; i++) (quiet = g.update(fr(320, 2250), true, 0.1, dt, tau)!), (loud = h.update(fr(320, 2250), true, 1, dt, tau)!);
+  expect(Math.log(quiet.f2 / 1100)).toBeLessThan(Math.log(loud.f2 / 1100) / 3);
+  // after a pause, the next phrase jumps rather than gliding from the old vowel
+  for (let i = 0; i < 15; i++) h.update(fr(0), false, 0, dt, tau);
+  h.update(fr(320, 2250), true, 1, dt, tau);
+  const next = h.update(fr(325, 2240), true, 1, dt, tau)!;
+  expect(next.f2).toBeGreaterThan(2200);
+});
