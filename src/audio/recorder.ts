@@ -2,10 +2,12 @@
  * Record a short video for posting: the Chimera tab's picture (the browser asks which tab or
  * window, offering this one first) with Chimera's own sound tapped from the engine's output, so
  * the performer's voice into the mic isn't in it. Light by design: 720p at most, 30 fps, about
- * 2.5 Mb/s video and 128 kb/s audio, MP4 (H.264/AAC) where the browser can (current Chrome), and
+ * 2.5 Mb/s video and 128 kb/s audio, MP4 (H.264/AAC), built by hand with WebCodecs where the
+ * browser can (mp4Recorder.ts; Chrome's own MP4 recording came out corrupted), and
  * at most 2 min 20 s (X's limit for most accounts). The file downloads when recording stops.
  */
 import { engine } from "./AudioEngine.ts";
+import { recordMp4, supported } from "./mp4Recorder.ts";
 
 export const MAX_SECONDS = 140;
 
@@ -47,28 +49,15 @@ export async function startRecording(onDone: (result: { file?: string; error?: s
   // what was shared: a whole screen or window shows black without macOS's Screen Recording
   // permission for Chrome (this tab doesn't need it)
   const surface = (video?.getSettings() as { displaySurface?: string } | undefined)?.displaySurface;
-  const stream = new MediaStream([...screen.getVideoTracks(), ...tap.stream.getAudioTracks()]);
-  const mimeType = TYPES.find((t) => MediaRecorder.isTypeSupported(t)) ?? "";
-  const rec = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 2_500_000, audioBitsPerSecond: 128_000 });
-  const chunks: Blob[] = [];
-  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   const t0 = performance.now();
   let stopped = false;
-  const stop = () => {
-    if (stopped) return;
-    stopped = true;
-    clearTimeout(limit);
-    if (rec.state !== "inactive") rec.stop();
-  };
-  rec.onstop = () => {
+  const finish = (blob: Blob | null, ext: string) => {
     screen.getTracks().forEach((t) => t.stop());
     engine.releaseTap(tap);
-    if (!chunks.length) return onDone({ error: "Nothing was recorded" });
-    const type = rec.mimeType || mimeType || "video/webm";
-    const ext = type.startsWith("video/mp4") ? "mp4" : "webm";
+    if (!blob || !blob.size) return onDone({ error: "Nothing was recorded" });
     const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
     const file = `chimera-${stamp}.${ext}`;
-    const url = URL.createObjectURL(new Blob(chunks, { type }));
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = file;
@@ -83,10 +72,47 @@ export async function startRecording(onDone: (result: { file?: string; error?: s
       else onDone({ file: `${file} (${size})` });
     });
   };
+
+  // by hand where the browser can (a fixed 1280×720 picture, nothing changes mid-stream);
+  // MediaRecorder otherwise
+  const ctxRate = engine.ctx?.sampleRate ?? 48000;
+  const codecs = await supported(ctxRate);
+  const audioTrack = tap.stream.getAudioTracks()[0];
+  let stopNow: () => void;
+  if (codecs && video && audioTrack) {
+    const bg = getComputedStyle(document.body).backgroundColor || "#000";
+    const rec = recordMp4(video, audioTrack, ctxRate, codecs, bg);
+    stopNow = () =>
+      void rec.stop().then(
+        (blob) => finish(blob, "mp4"),
+        (e) => {
+          screen.getTracks().forEach((t) => t.stop());
+          engine.releaseTap(tap);
+          onDone({ error: `Recording failed: ${e instanceof Error ? e.message : String(e)}` });
+        },
+      );
+  } else {
+    const stream = new MediaStream([...screen.getVideoTracks(), ...tap.stream.getAudioTracks()]);
+    const mimeType = TYPES.find((t) => MediaRecorder.isTypeSupported(t)) ?? "";
+    const rec = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 2_500_000, audioBitsPerSecond: 128_000 });
+    const chunks: Blob[] = [];
+    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    rec.onstop = () => {
+      const type = rec.mimeType || mimeType || "video/webm";
+      finish(chunks.length ? new Blob(chunks, { type }) : null, type.startsWith("video/mp4") ? "mp4" : "webm");
+    };
+    rec.start(1000);
+    stopNow = () => rec.state !== "inactive" && rec.stop();
+  }
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    clearTimeout(limit);
+    stopNow();
+  };
   // the browser's own "Stop sharing" ends it too
   screen.getVideoTracks()[0]?.addEventListener("ended", stop);
   const limit = setTimeout(stop, MAX_SECONDS * 1000);
-  rec.start(1000);
   return { stop, elapsed: () => (performance.now() - t0) / 1000 };
 }
 

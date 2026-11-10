@@ -14,6 +14,7 @@
     "wasm": "cargo build -p chimera-wasm --release --target wasm32-unknown-unknown && cp target/wasm32-unknown-unknown/release/chimera_wasm.wasm src/wasm/chimera.wasm"
   },
   "dependencies": {
+    "mp4-muxer": "5.2.2",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "three": "0.186.1",
