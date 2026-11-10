@@ -25,6 +25,8 @@ export function VoiceControls() {
   const setArtic = useStore((st) => st.setArtic);
   const t = useStore((st) => st.touch);
   const setTouch = useStore((st) => st.setTouch);
+  const d = useStore((st) => st.distortion);
+  const setDistortion = useStore((st) => st.setDistortion);
   const r = useStore((st) => st.reverb);
   const setReverb = useStore((st) => st.setReverb);
   const pages: EncoderPage[] = [
@@ -59,6 +61,16 @@ export function VoiceControls() {
         { label: "Floor", value: t.floor, min: 0, max: 0.3, onChange: (v) => setTouch({ floor: v }), format: pct },
       ],
       panel: <TouchGraph />,
+    },
+    {
+      // before the reverb: Drive 0 is clean, Level 50% is unity
+      name: "Drive",
+      encoders: [
+        { label: "Drive", value: d.drive, min: 0, max: 1, onChange: (v) => setDistortion({ drive: v }), format: pct },
+        { label: "Tone", value: d.tone, min: 0, max: 1, onChange: (v) => setDistortion({ tone: v }), format: (v) => { const hz = 700 * Math.pow(16000 / 700, v); return { value: hz >= 1000 ? (hz / 1000).toFixed(1) : hz.toFixed(0), unit: hz >= 1000 ? "kHz" : "Hz" }; } },
+        { label: "Mix", value: d.mix, min: 0, max: 1, onChange: (v) => setDistortion({ mix: v }), format: pct },
+        { label: "Level", value: d.level, min: 0, max: 1, onChange: (v) => setDistortion({ level: v }), format: (v) => ({ value: v <= 0.001 ? "−∞" : (20 * Math.log10(2 * v)).toFixed(1), unit: "dB" }) },
+      ],
     },
     {
       name: "Reverb",

@@ -97,3 +97,21 @@ test("plate reverb: dry at mix 0, a decaying stereo tail, stable at full decay",
   for (const v of long.outL) expect(Number.isFinite(v)).toBe(true);
   expect(rms(long.outL, 44100 + 22050, 88200)).toBeLessThan(rms(long.outL, 0, 22050));
 });
+
+test("distortion: clean at drive 0, saturating and lopsided at full drive, level kept in check", async () => {
+  const { shapeCurve, driveMakeup, DEFAULT_DISTORTION } = await import("../src/audio/distortion.ts");
+  const at = (c: Float32Array, x: number) => c[Math.round(((x + 1) / 2) * (c.length - 1))];
+  const clean = shapeCurve(0);
+  for (const x of [-1, -0.5, -0.1, 0.1, 0.5, 1]) expect(Math.abs(at(clean, x) - x)).toBeLessThan(0.005 + 0.001);
+  expect(driveMakeup(0)).toBeCloseTo(1, 2);
+  expect(DEFAULT_DISTORTION.drive).toBe(0);
+  const hot = shapeCurve(1);
+  expect(at(hot, 1)).toBeCloseTo(1, 5);
+  expect(at(hot, 0.3)).toBeGreaterThan(0.95); // saturated well before full scale
+  expect(Math.abs(at(hot, -1))).not.toBeCloseTo(1, 2); // lopsided: even harmonics
+  for (let i = 1; i < hot.length; i++) expect(hot[i]).toBeGreaterThanOrEqual(hot[i - 1]);
+  // a typical voice peak (0.2) comes out within about ±6 dB of where it went in
+  const out = at(hot, 0.2) * driveMakeup(1);
+  expect(out).toBeGreaterThan(0.1);
+  expect(out).toBeLessThan(0.4);
+});

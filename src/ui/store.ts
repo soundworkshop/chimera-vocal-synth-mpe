@@ -10,6 +10,7 @@ import { singNoteOn, singNoteOff, stopSinging, ensureDictionary } from "./singin
 import { stopSpeaking } from "./speech.ts";
 import { connectMidi, disconnectMidi, type MidiStatus, type MpeVoice } from "./midi.ts";
 import { DEFAULT_REVERB, type ReverbSettings } from "../audio/plateReverb.ts";
+import { DEFAULT_DISTORTION, type DistortionSettings } from "../audio/distortion.ts";
 import { DEFAULT_TOUCH, touchToBreath, type TouchCurve } from "./touch.ts";
 export { touchToBreath };
 
@@ -18,16 +19,21 @@ export const mpeLive: { pressure: number | null } = { pressure: null };
 
 /** settings kept across visits (this browser only) */
 const SAVED_KEY = "chimera-mpe-settings";
-function loadSaved(): { touch: TouchCurve; reverb: ReverbSettings } {
+interface Saved {
+  touch: TouchCurve;
+  reverb: ReverbSettings;
+  distortion: DistortionSettings;
+}
+function loadSaved(): Saved {
   try {
     const raw = typeof localStorage !== "undefined" ? localStorage.getItem(SAVED_KEY) : null;
     const v = raw ? JSON.parse(raw) : {};
-    return { touch: { ...DEFAULT_TOUCH, ...v.touch }, reverb: { ...DEFAULT_REVERB, ...v.reverb } };
+    return { touch: { ...DEFAULT_TOUCH, ...v.touch }, reverb: { ...DEFAULT_REVERB, ...v.reverb }, distortion: { ...DEFAULT_DISTORTION, ...v.distortion } };
   } catch {
-    return { touch: { ...DEFAULT_TOUCH }, reverb: { ...DEFAULT_REVERB } };
+    return { touch: { ...DEFAULT_TOUCH }, reverb: { ...DEFAULT_REVERB }, distortion: { ...DEFAULT_DISTORTION } };
   }
 }
-function save(v: { touch: TouchCurve; reverb: ReverbSettings }): void {
+function save(v: Saved): void {
   try {
     localStorage.setItem(SAVED_KEY, JSON.stringify(v));
   } catch {
@@ -37,6 +43,7 @@ function save(v: { touch: TouchCurve; reverb: ReverbSettings }): void {
 const saved = loadSaved();
 // only stored until the audio starts (no engine call)
 engine.setReverb(saved.reverb);
+engine.setDistortion(saved.distortion);
 
 export type Mode = "play" | "speak" | "sing" | "bestiary" | "beatbox";
 
@@ -114,6 +121,8 @@ interface State {
   setTouch: (v: Partial<TouchCurve>) => void;
   reverb: ReverbSettings;
   setReverb: (v: Partial<ReverbSettings>) => void;
+  distortion: DistortionSettings;
+  setDistortion: (v: Partial<DistortionSettings>) => void;
   setView: (v: Partial<ViewOptions>) => void;
 }
 
@@ -184,6 +193,11 @@ function applyMpe(voices: MpeVoice[], sendsPressure: boolean): void {
       useStore.setState((t) => ({ source: { ...t.source, f0: mpeF0 } }));
     });
 }
+
+const saveAll = () => {
+  const s = useStore.getState();
+  save({ touch: s.touch, reverb: s.reverb, distortion: s.distortion });
+};
 
 let startPromise: Promise<void> | null = null;
 
@@ -426,13 +440,19 @@ export const useStore = create<State>((set, get) => ({
   touch: saved.touch,
   setTouch: (v) => {
     set((s) => ({ touch: { ...s.touch, ...v } }));
-    save({ touch: get().touch, reverb: get().reverb });
+    saveAll();
+  },
+  distortion: saved.distortion,
+  setDistortion: (v) => {
+    set((s) => ({ distortion: { ...s.distortion, ...v } }));
+    engine.setDistortion(v);
+    saveAll();
   },
   reverb: saved.reverb,
   setReverb: (v) => {
     set((s) => ({ reverb: { ...s.reverb, ...v } }));
     engine.setReverb(v);
-    save({ touch: get().touch, reverb: get().reverb });
+    saveAll();
   },
   setMidi: (on) => {
     const noteOff = (n: number) => get().noteOff(n);

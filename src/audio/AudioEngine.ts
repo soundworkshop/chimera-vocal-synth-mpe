@@ -5,6 +5,7 @@
 import workletUrl from "../worklet/processor.ts?worker&url";
 import reverbUrl from "./reverbWorklet.ts?worker&url";
 import { DEFAULT_REVERB, type ReverbSettings } from "./plateReverb.ts";
+import { DEFAULT_DISTORTION, driveMakeup, levelGain, shapeCurve, toneHz, type DistortionSettings } from "./distortion.ts";
 import { chimeraModule } from "../wasm/chimera.ts";
 import type { ToWorklet, FromWorklet, TelemetryMessage, PlannedMessage, CreatureTelemetryMessage } from "../worklet/protocol.ts";
 import type { BodyMix } from "../wasm/types.ts";
@@ -25,6 +26,10 @@ export class AudioEngine {
   /** plate reverb after the master (the analysers read the dry voice) */
   private reverb: AudioWorkletNode | null = null;
   private reverbSettings: ReverbSettings = { ...DEFAULT_REVERB };
+  /** distortion between the voice (or its close-mic chain) and the master */
+  private dist: { input: GainNode; shaper: WaveShaperNode; tone: BiquadFilterNode; makeup: GainNode; wet: GainNode; dry: GainNode; level: GainNode } | null = null;
+  private distSettings: DistortionSettings = { ...DEFAULT_DISTORTION };
+  private distDrive = -1;
   /** "close mic" chain: proximity bass, presence, compression (beatboxers cup the mic) */
   private micIn: AudioNode | null = null;
   private micOn = false;
@@ -102,9 +107,27 @@ export class AudioEngine {
     comp.release.value = 0.12;
     const makeup = ctx.createGain();
     makeup.gain.value = 2.2;
-    shelf.connect(presence).connect(comp).connect(makeup).connect(master);
+    // distortion: input → (shaper → tone → makeup → wet) + dry → level → master
+    const dist = {
+      input: ctx.createGain(),
+      shaper: ctx.createWaveShaper(),
+      tone: ctx.createBiquadFilter(),
+      makeup: ctx.createGain(),
+      wet: ctx.createGain(),
+      dry: ctx.createGain(),
+      level: ctx.createGain(),
+    };
+    dist.shaper.oversample = "4x";
+    dist.tone.type = "lowpass";
+    dist.tone.Q.value = Math.SQRT1_2; // Butterworth: flat until the cutoff
+    dist.input.connect(dist.shaper).connect(dist.tone).connect(dist.makeup).connect(dist.wet).connect(dist.level);
+    dist.input.connect(dist.dry).connect(dist.level);
+    dist.level.connect(master);
+    this.dist = dist;
+    this.applyDistortion(0);
+    shelf.connect(presence).connect(comp).connect(makeup).connect(dist.input);
     this.micIn = shelf;
-    node.connect(this.micOn ? shelf : master);
+    node.connect(this.micOn ? shelf : dist.input);
     // the reverb is optional: if its module fails to load, the voice still plays dry
     try {
       await ctx.audioWorklet.addModule(reverbUrl);
@@ -198,9 +221,9 @@ export class AudioEngine {
   setMic(on: boolean): void {
     if (on === this.micOn) return;
     this.micOn = on;
-    if (!this.node || !this.master || !this.micIn) return;
+    if (!this.node || !this.dist || !this.micIn) return;
     this.node.disconnect();
-    this.node.connect(on ? this.micIn : this.master);
+    this.node.connect(on ? this.micIn : this.dist.input);
   }
 
   setBeat(m: { steps?: import("../wasm/types.ts").BeatStep[] | (import("../wasm/types.ts").BeatStep | null)[]; bpm?: number; swing?: number; playing?: boolean }): void {
@@ -238,6 +261,30 @@ export class AudioEngine {
     this.pendingArtic = { ...(this.pendingArtic ?? {}), ...values };
     if (tipFree !== undefined) this.pendingTipFree = tipFree;
     this.scheduleFlush();
+  }
+
+  /** Distortion knobs (each 0..1); kept for when audio starts. */
+  setDistortion(values: Partial<DistortionSettings>): void {
+    this.distSettings = { ...this.distSettings, ...values };
+    this.applyDistortion(0.02);
+  }
+
+  private applyDistortion(smooth: number): void {
+    const d = this.dist, ctx = this.ctx;
+    if (!d || !ctx) return;
+    const s = this.distSettings;
+    // the curve is rebuilt only when drive moves (a 4096-point table)
+    if (s.drive !== this.distDrive) {
+      d.shaper.curve = shapeCurve(s.drive);
+      this.distDrive = s.drive;
+    }
+    const set = (p: AudioParam, v: number) => (smooth > 0 ? p.setTargetAtTime(v, ctx.currentTime, smooth) : (p.value = v));
+    set(d.makeup.gain, driveMakeup(s.drive));
+    set(d.tone.frequency, toneHz(s.tone));
+    // equal-power crossfade, so half-way isn't a dip
+    set(d.wet.gain, Math.sin((s.mix * Math.PI) / 2));
+    set(d.dry.gain, Math.cos((s.mix * Math.PI) / 2));
+    set(d.level.gain, levelGain(s.level));
   }
 
   /** Reverb knobs (each 0..1); kept for when audio starts. */
