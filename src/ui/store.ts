@@ -8,7 +8,7 @@ import type { ParamDef } from "../wasm/types.ts";
 import { BEAT_PRESETS, BASS_NOTE, beatReady, parseBeat, type BeatStep } from "../wasm/engine.ts";
 import { singNoteOn, singNoteOff, stopSinging, ensureDictionary } from "./singing.ts";
 import { stopSpeaking } from "./speech.ts";
-import { connectMidi, disconnectMidi, type MidiStatus } from "./midi.ts";
+import { connectMidi, disconnectMidi, type MidiStatus, type MpeVoice } from "./midi.ts";
 
 export type Mode = "play" | "speak" | "sing" | "bestiary" | "beatbox";
 
@@ -103,6 +103,52 @@ function updateGate(s: { hold: boolean; heldNotes: number[]; mode: Mode; keyCall
   // keys that trigger calls leave the breath to the call; sung notes breathe by themselves
   const keysBreathe = !(s.mode === "bestiary" && s.keyCall) && s.mode !== "sing";
   engine.gate(s.hold || (keysBreathe && s.heldNotes.length > 0) ? 1 : 0);
+}
+
+/**
+ * MPE in Play mode: the highest held note sounds (high-note priority), at its note plus its
+ * channel's pitch bend, with its pressure scaling the Breath knob (the knob is the full-pressure
+ * breath). These go to the engine directly, not through the store: pitch bend and pressure arrive
+ * hundreds of times a second. The Keys readout catches up once a frame.
+ *
+ * The pitch glide is cut to a few ms while MPE notes are held, or the default 60 ms glide would
+ * smooth away vibrato and slides. Glide and breath go back to the knobs a moment after the last
+ * note lets go (not at once: the breath's release would jump back up to the knob's level).
+ */
+const MPE_GLIDE = 0.004;
+let mpeActive = false;
+let mpeRestore: ReturnType<typeof setTimeout> | null = null;
+let mpeFrame = 0;
+let mpeF0 = 0;
+
+function applyMpe(voices: MpeVoice[], sendsPressure: boolean): void {
+  const s = useStore.getState();
+  if (s.mode !== "play") return;
+  if (!voices.length) {
+    if (mpeActive && !mpeRestore)
+      mpeRestore = setTimeout(() => {
+        mpeRestore = null;
+        mpeActive = false;
+        const t = useStore.getState();
+        engine.setSource({ glide: t.source.glide, pressure: t.source.pressure });
+      }, 400);
+    return;
+  }
+  if (mpeRestore) clearTimeout(mpeRestore), (mpeRestore = null);
+  mpeActive = true;
+  // high-note priority; among equal notes, the latest
+  let top = voices[0];
+  for (const v of voices) if (v.note > top.note || (v.note === top.note && v.serial > top.serial)) top = v;
+  // no pressure from this controller: the knob's breath, as before; pressure not yet sent for
+  // this note (it follows the note-on): silent until it arrives
+  const amount = top.pressure ?? (sendsPressure ? 0 : 1);
+  mpeF0 = midiToHz(top.note + top.bend);
+  engine.setSource({ f0: mpeF0, glide: MPE_GLIDE, pressure: amount * s.source.pressure });
+  if (!mpeFrame)
+    mpeFrame = requestAnimationFrame(() => {
+      mpeFrame = 0;
+      useStore.setState((t) => ({ source: { ...t.source, f0: mpeF0 } }));
+    });
 }
 
 let startPromise: Promise<void> | null = null;
@@ -359,6 +405,7 @@ export const useStore = create<State>((set, get) => ({
         get().noteOn(n, v);
       },
       noteOff,
+      expression: applyMpe,
       inputs: (names) => set({ midi: { status: "on", inputs: names } }),
     }).catch(() => {
       if (get().midi.status === "connecting") set({ midi: { status: "denied", inputs: [] } });
