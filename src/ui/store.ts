@@ -16,7 +16,7 @@ import { assignSlots } from "./voiceSlots.ts";
 export { touchToBreath };
 
 /** the live controller, for the curve display: pressure 0..1, or null when nothing is held */
-export const mpeLive: { pressure: number | null; breath: number } = { pressure: null, breath: 0 };
+export const mpeLive: { pressure: number | null; breath: number; breaths: number[] } = { pressure: null, breath: 0, breaths: [] };
 
 /** settings kept across visits (this browser only) */
 const SAVED_KEY = "chimera-mpe-settings";
@@ -215,6 +215,7 @@ function resetMpe(): void {
   for (let i = 1; i < awake.length; i++) idle(i);
   mpeLive.pressure = null;
   mpeLive.breath = 0;
+  mpeLive.breaths = [];
 }
 
 function applyMpe(voices: MpeVoice[], sendsPressure: boolean): void {
@@ -239,6 +240,8 @@ function applyMpe(voices: MpeVoice[], sendsPressure: boolean): void {
   // the volume envelope (breath after the touch curve, 0..1): the louder voice's, as the two
   // share one mouth
   let env = 0;
+  // and each voice's own (the duet: each head's sweep follows its own voice)
+  const breaths: number[] = [];
   playing.forEach((v, i) => {
     const voice = i;
     // a voice with no note: silent (its gate stays open a moment, so a quick next note starts
@@ -252,11 +255,13 @@ function applyMpe(voices: MpeVoice[], sendsPressure: boolean): void {
     // this note (it follows the note-on): silent until it arrives
     const amount = v.pressure === null ? (sendsPressure ? 0 : 1) : touchToBreath(v.pressure, s.touch);
     env = Math.max(env, amount);
+    breaths[i] = amount;
     const f0 = midiToHz(v.note + v.bend);
     engine.setSourceNow({ f0, glide: MPE_GLIDE, pressure: amount * s.source.pressure }, voice);
     if (i === 0) mpeF0 = f0;
   });
   mpeLive.breath = env;
+  mpeLive.breaths = breaths;
   const main = playing[0] ?? playing[1];
   mpeLive.pressure = main ? (main.pressure ?? (sendsPressure ? 0 : null)) : null;
   if (!mpeFrame)

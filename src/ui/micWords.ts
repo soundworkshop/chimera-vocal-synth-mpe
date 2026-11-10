@@ -17,7 +17,9 @@ import { hissSlice, stopGestures } from "./consonantGestures.ts";
 import { analyzeFormants, applyCalibration, calibrationProblem, fitCalibration, FormantFollower, IDENTITY_CALIBRATION, median, type FormantCalibration } from "../audio/formants.ts";
 import { useStore } from "./store.ts";
 import { getModel } from "./useModel.ts";
-import { useSweep } from "./vowelSweep.ts";
+import { sweepOwns } from "./vowelSweep.ts";
+import { duetOn, setVoice2Artic, useDuet } from "./duet.ts";
+import type { VoiceModel } from "./analysis.ts";
 import { ENGLISH_VOWELS, formantTable as tableFor } from "./formantTable.ts";
 import { NEUTRAL, restTip } from "../wasm/engine.ts";
 
@@ -274,10 +276,34 @@ function tick(): void {
   }
   micLive.aim = near;
   const table = formantTable(model);
-  // until the table's vowels are measured (the first frame or two), hold still; while the
-  // vowel sweep is on, it owns the vowel (the consonants above still play)
-  if (!table.ready || useSweep.getState().on) return;
-  st.setArtic(table.lookup(t.f1, t.f2), true);
+  // until the table's vowels are measured (the first frame or two), hold still; while a voice's
+  // vowel sweep is on, it owns that voice's vowel (the consonants above still play)
+  if (table.ready && !sweepOwns(0)) st.setArtic(table.lookup(t.f1, t.f2), true);
+  // the duet's second voice says the same vowel in its own body: the target moved from voice 1's
+  // vowel space into voice 2's (fitted on the two bodies' "ee", "ah", "oo")
+  if (duetOn() && !sweepOwns(1)) {
+    const model2 = getModel(useDuet.getState().body2, ctx.sampleRate);
+    const table2 = formantTable(model2);
+    table2.grow(2);
+    if (table2.ready) {
+      const u = applyCalibration(t.f1, t.f2, bodyToBody(model, model2));
+      setVoice2Artic(table2.lookup(u.f1, u.f2), true);
+    }
+  }
+}
+
+/** the map from one body's vowel space to another's, fitted on their corner vowels (cached) */
+const crossFits = new Map<string, FormantCalibration>();
+function bodyToBody(from: VoiceModel, to: VoiceModel): FormantCalibration {
+  const key = `${from.vowels.map((v) => v.F1).join()}→${to.vowels.map((v) => v.F1).join()}`;
+  let c = crossFits.get(key);
+  if (!c) {
+    const corners = (m: VoiceModel) => ["i", "ɑ", "u"].map((ipa) => m.vowels.find((v) => v.ipa === ipa)).map((v) => ({ f1: v?.F1 ?? 0, f2: v?.F2 ?? 0 }));
+    const a = corners(from), b = corners(to);
+    c = a.some((v) => !v.f1) || b.some((v) => !v.f1) ? IDENTITY_CALIBRATION : fitCalibration(a, b);
+    crossFits.set(key, c);
+  }
+  return c;
 }
 
 function calibrateStep(voiced: boolean, f1: number, f2: number): void {

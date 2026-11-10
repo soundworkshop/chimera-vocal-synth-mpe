@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { useStore } from "../store.ts";
 import { bodyLabel, PRESETS, sameBody, type BodyMix } from "../body.ts";
+import { useDuet } from "../duet.ts";
 
 const W = 64, H = 32, P = 4;
 const STEP = 0.05;
@@ -26,17 +27,26 @@ const Y = (v: number) => P + v * (H - 2 * P);
  * shows the body at once and rebuilds the voice on release (a new airway, as a preset switch
  * does); the arrow keys move it a step at a time (left/right toward male/female, down toward child).
  */
-export function BodyPad() {
-  const body = useStore((s) => s.body);
-  const previewBody = useStore((s) => s.previewBody);
-  const setBody = useStore((s) => s.setBody);
+export function BodyPad(props: { voice?: number }) {
+  // voice 1: the store's body (as always); voice 2: the duet's second body
+  const two = props.voice === 1;
+  const body1 = useStore((s) => s.body);
+  const body2 = useDuet((s) => s.preview2 ?? s.body2);
+  const body = two ? body2 : body1;
+  const preview1 = useStore((s) => s.previewBody);
+  const set1 = useStore((s) => s.setBody);
+  const preview2 = useDuet((s) => s.previewBody2);
+  const set2 = useDuet((s) => s.setBody2);
+  const previewBody = two ? preview2 : preview1;
+  const setBody = two ? set2 : set1;
+  const current = () => (two ? useDuet.getState().body2 : useStore.getState().body);
   const drag = useRef<{ id: number; at: BodyMix } | null>(null);
 
   const at = (e: React.PointerEvent): BodyMix => {
     const r = (e.currentTarget as Element).getBoundingClientRect();
     const u = ((e.clientX - r.left) / r.width) * (W / (W - 2 * P)) - P / (W - 2 * P);
     const v = ((e.clientY - r.top) / r.height) * (H / (H - 2 * P)) - P / (H - 2 * P);
-    return fromUV(Math.min(1, Math.max(0, u)), Math.min(1, Math.max(0, v)), drag.current?.at ?? useStore.getState().body);
+    return fromUV(Math.min(1, Math.max(0, u)), Math.min(1, Math.max(0, v)), drag.current?.at ?? current());
   };
   const move = (b: BodyMix) => {
     if (!drag.current || sameBody(b, drag.current.at)) return;
@@ -69,7 +79,7 @@ export function BodyPad() {
       onPointerDown={(e) => {
         if (e.button !== 0) return;
         (e.currentTarget as Element).setPointerCapture(e.pointerId);
-        drag.current = { id: e.pointerId, at: useStore.getState().body };
+        drag.current = { id: e.pointerId, at: current() };
         move(at(e));
       }}
       onPointerMove={(e) => drag.current?.id === e.pointerId && move(at(e))}
@@ -77,7 +87,7 @@ export function BodyPad() {
       onPointerCancel={end}
       onLostPointerCapture={end}
       onKeyDown={(e) => {
-        const b = useStore.getState().body;
+        const b = current();
         const next =
           e.key === "ArrowLeft" ? { ...b, female: q(b.female - STEP) }
           : e.key === "ArrowRight" ? { ...b, female: q(b.female + STEP) }

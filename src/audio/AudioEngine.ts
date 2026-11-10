@@ -37,6 +37,15 @@ export class AudioEngine {
    * noise under live playing; the engine now refuses an internal rate under 60 kHz.)
    */
   private extras: { node: AudioWorkletNode; asleep: boolean }[] = [];
+  /**
+   * The duet: voice 2 has its own mouth and body (not the first voice's), and sends telemetry for
+   * its own head. Its body and last articulation are kept here so a rebuilt node gets them.
+   */
+  private ownMouths = false;
+  private voice2Body: BodyMix | null = null;
+  private voice2Artic: Partial<HumanArtic> = {};
+  /** the latest telemetry of each extra voice (index: voice − 1), while it sends any */
+  latestExtra: (TelemetryMessage | null)[] = [];
   private voiceCount = 1;
   /** the airway oversampling the extra voices were built with (0: the default) */
   private extrasOs = -1;
@@ -281,7 +290,41 @@ export class AudioEngine {
   setBody(body: BodyMix): void {
     this.mirrorBody = body;
     this.send({ type: "body", body });
-    this.toExtras({ type: "body", body });
+    this.toMirrored({ type: "body", body });
+  }
+
+  /**
+   * The duet on or off: voice 2 gets (or gives back) its own mouth and body, and sends (or stops)
+   * the telemetry its head draws from. Off: it takes the first voice's mouth and body again.
+   */
+  setOwnMouths(on: boolean): void {
+    if (on === this.ownMouths) return;
+    this.ownMouths = on;
+    const x = this.extras[0];
+    if (!x) return;
+    const send = (m: ToWorklet) => x.node.port.postMessage(m);
+    send({ type: "telemetry", enabled: on });
+    if (!on) this.latestExtra[0] = null;
+    const body = on ? (this.voice2Body ?? this.mirrorBody) : this.mirrorBody;
+    if (body) send({ type: "body", body });
+    send({ type: "artic", values: on ? { ...this.mirrorArtic, ...this.voice2Artic } : this.mirrorArtic, tipFree: this.mirrorTipFree });
+  }
+
+  /** Voice 2's own body (the duet). */
+  setVoice2Body(body: BodyMix): void {
+    this.voice2Body = body;
+    if (this.ownMouths) this.extras[0]?.node.port.postMessage({ type: "body", body } satisfies ToWorklet);
+  }
+
+  /** Voice 2's own mouth (the duet): sent now (its callers already run once a frame). */
+  setVoice2Artic(values: Partial<HumanArtic>, tipFree?: boolean): void {
+    this.voice2Artic = { ...this.voice2Artic, ...values };
+    if (this.ownMouths) this.extras[0]?.node.port.postMessage({ type: "artic", values, tipFree } satisfies ToWorklet);
+  }
+
+  /** To the extra voices that follow the first one's mouth and body (all but a duet's voice 2). */
+  private toMirrored(m: ToWorklet): void {
+    this.extras.forEach((x, i) => (this.ownMouths && i === 0 ? null : x.node.port.postMessage(m)));
   }
 
   /** How many voices play (1 … 8): the extra ones are created now, or when audio starts. */
@@ -305,14 +348,18 @@ export class AudioEngine {
     while (this.extras.length < want) {
       const node = new AudioWorkletNode(ctx, "chimera", { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2], processorOptions: { module: chimeraModule(), oversample: os } });
       const n = this.extras.length + 2;
+      const idx = this.extras.length;
       node.port.onmessage = (e: MessageEvent<FromWorklet>) => {
         if (e.data.type === "error") console.error(`voice ${n}:`, e.data.message);
+        else if (e.data.type === "telemetry") this.latestExtra[idx] = e.data;
       };
       const send = (m: ToWorklet) => node.port.postMessage(m);
-      // nothing reads its telemetry: skip the work
-      send({ type: "telemetry", enabled: false });
-      if (this.mirrorBody) send({ type: "body", body: this.mirrorBody });
-      send({ type: "artic", values: this.mirrorArtic, tipFree: this.mirrorTipFree });
+      const own = this.ownMouths && idx === 0;
+      // only a duet's second head reads its telemetry; otherwise skip the work
+      send({ type: "telemetry", enabled: own });
+      const body = own ? (this.voice2Body ?? this.mirrorBody) : this.mirrorBody;
+      if (body) send({ type: "body", body });
+      send({ type: "artic", values: own ? { ...this.mirrorArtic, ...this.voice2Artic } : this.mirrorArtic, tipFree: this.mirrorTipFree });
       send({ type: "source", values: this.mirrorSource });
       send({ type: "gate", level: 0 });
       // asleep until it gets a note
@@ -325,6 +372,7 @@ export class AudioEngine {
   /** Remove the extra voices beyond the first `keep`. */
   private removeExtras(keep: number): void {
     while (this.extras.length > keep) {
+      this.latestExtra[this.extras.length - 1] = null;
       const x = this.extras.pop()!;
       x.node.port.onmessage = null;
       x.node.disconnect();
@@ -452,7 +500,7 @@ export class AudioEngine {
       if (this.pendingArtic || this.pendingTipFree !== undefined) {
         const m: ToWorklet = { type: "artic", values: this.pendingArtic ?? {}, tipFree: this.pendingTipFree };
         this.send(m);
-        this.toExtras(m);
+        this.toMirrored(m);
         this.mirrorArtic = { ...this.mirrorArtic, ...m.values };
         if (m.tipFree !== undefined) this.mirrorTipFree = m.tipFree;
         this.pendingArtic = null;

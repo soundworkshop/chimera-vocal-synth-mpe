@@ -21,7 +21,10 @@ import { playDemo, DEMO_SONGS } from "./singing.ts";
 import type { Mode } from "./store.ts";
 import type { BodyName } from "../worklet/protocol.ts";
 import { BodyPad } from "./components/BodyPad.tsx";
-import { bodyLabel, presetOf, PRESETS } from "./body.ts";
+import { useDuet, voice2Live } from "./duet.ts";
+import { getModel } from "./useModel.ts";
+import type { HeadFeed } from "./components/AnatomyView3D.tsx";
+import { bodyLabel, presetOf, PRESETS, sameBody } from "./body.ts";
 
 // three.js only loads when the 3D view is first shown
 const AnatomyView3D = lazy(() => import("./components/AnatomyView3D.tsx").then((m) => ({ default: m.AnatomyView3D })));
@@ -78,6 +81,7 @@ function TopBar() {
   const started = useStore((s) => s.started);
   const starting = useStore((s) => s.starting);
   const start = useStore((s) => s.start);
+  const duet = useStore((s) => s.mode === "play" && s.polyphony === 2);
   const body = useStore((s) => s.body);
   const setBody = useStore((s) => s.setBody);
   const volume = useStore((s) => s.volume);
@@ -110,7 +114,7 @@ function TopBar() {
           { value: "beatbox", label: "Beatbox" },
         ]}
       />
-      {mode !== "bestiary" && (
+      {mode !== "bestiary" && !duet && (
         <div className="body-control">
           <Segmented<BodyName>
             label="Body"
@@ -272,13 +276,84 @@ export function App() {
 
 function Wall() {
   const mode = useStore((s) => s.mode);
+  const duet = useStore((s) => s.mode === "play" && s.polyphony === 2);
   return (
-    <div className={`app text-colors mode-${mode}`}>
+    <div className={`app text-colors mode-${mode}${duet ? " duet" : ""}`}>
       <TopBar />
-      <main className={`wall wall-${mode}`}>
-        <LeftScreen />
-        {mode === "play" ? <PlayRight /> : mode === "speak" ? <SpeakRight /> : mode === "sing" ? <SingRight /> : mode === "beatbox" ? <BeatboxRight /> : <BestiaryRight />}
-      </main>
+      {duet ? (
+        <DuetWall />
+      ) : (
+        <main className={`wall wall-${mode}`}>
+          <LeftScreen />
+          {mode === "play" ? <PlayRight /> : mode === "speak" ? <SpeakRight /> : mode === "sing" ? <SingRight /> : mode === "beatbox" ? <BeatboxRight /> : <BestiaryRight />}
+        </main>
+      )}
     </div>
+  );
+}
+
+/**
+ * The duet (Play, two voices): each voice's head at its own edge of the screen, facing the other,
+ * with its body triangle in its window and its own vowel map and sweep below; the shared voice
+ * controls and the keys between them. The first note held sings on the left voice, the second on
+ * the right; both mix into the one distortion and reverb.
+ */
+function DuetWall() {
+  return (
+    <main className="wall wall-duet">
+      <DuetHead voice={0} />
+      <DuetHead voice={1} />
+      <Screen className="duet-vowels-0" title="Vowels" sub="Left voice" tools={<SweepToggle voice={0} />}>
+        <VowelMap voice={0} />
+      </Screen>
+      <Screen className="duet-vowels-1" title="Vowels" sub="Right voice" tools={<SweepToggle voice={1} />}>
+        <VowelMap voice={1} />
+      </Screen>
+      <div className="duet-center">
+        <Screen className="s-voice" title="Voice" sub="Both voices" tools={<VoiceToggles />}>
+          <VoiceControls />
+        </Screen>
+        <Screen className="s-keys" title="Keys" sub="Left: first note, right: second">
+          <Keys />
+        </Screen>
+      </div>
+    </main>
+  );
+}
+
+/** One duet voice's 3D head (the left faces right, the right faces left) and its body triangle. */
+function DuetHead(props: { voice: number }) {
+  const voice = props.voice;
+  const body1 = useStore((s) => s.body);
+  const body2 = useDuet((s) => s.preview2 ?? s.body2);
+  const view = useStore((s) => s.view);
+  const body = voice === 0 ? body1 : body2;
+  // voice 2's head draws from voice 2's own engine (its telemetry, its body's model)
+  const feed: HeadFeed | undefined =
+    voice === 0
+      ? undefined
+      : {
+          model: getModel(body2, engine.ctx?.sampleRate ?? 48000),
+          view,
+          frame: () => {
+            const t = engine.latestExtra[0] ?? null;
+            return { tele: t && sameBody(t.body, body2) ? t : null, artic: { ...useStore.getState().artic, ...voice2Live.artic }, epoch: 0 };
+          },
+          facing: -1,
+        };
+  return (
+    <Screen
+      className={`duet-head-${voice}`}
+      focus={voice === 0}
+      title={voice === 0 ? "Left voice" : "Right voice"}
+      sub={`${bodyLabel(body)} / 3D`}
+      label={voice === 0 ? "Left voice, live vocal tract" : "Right voice, live vocal tract"}
+      tools={<BodyPad voice={voice} />}
+    >
+      <Suspense fallback={null}>
+        <AnatomyView3D feed={feed} />
+      </Suspense>
+      {voice === 0 && <StartPrompt />}
+    </Screen>
   );
 }
