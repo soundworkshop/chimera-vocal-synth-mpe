@@ -3,6 +3,7 @@ import { mpeLive, POLYPHONY, touchToBreath, useStore } from "../store.ts";
 import { V } from "../colors.ts";
 import { DISTORTION_TYPES } from "../../audio/distortion.ts";
 import { micLive, useMic } from "../micWords.ts";
+import { useEnvMod } from "../envMod.ts";
 import { EncoderPages, type EncoderPage } from "./Encoder.tsx";
 import { Chip } from "./Screen.tsx";
 
@@ -36,6 +37,7 @@ export function VoiceControls(props: { only?: string[]; omit?: string[] } = {}) 
   const mic = useMic();
   const r = useStore((st) => st.reverb);
   const setReverb = useStore((st) => st.setReverb);
+  const mod = useEnvMod();
   const pages: EncoderPage[] = [
     {
       name: "Voice",
@@ -110,6 +112,21 @@ export function VoiceControls(props: { only?: string[]; omit?: string[] } = {}) 
         { label: "Decay", value: r.time, min: 0, max: 1, onChange: (v) => setReverb({ time: v }), format: pct },
         { label: "Tone", value: r.tone, min: 0, max: 1, onChange: (v) => setReverb({ tone: v }), format: pct },
         { label: "Diffuse", value: r.diffusion, min: 0, max: 1, onChange: (v) => setReverb({ diffusion: v }), format: pct },
+      ],
+    },
+    {
+      // the volume envelope (PT2 pressure after the touch curve) moves the soft palate: + opens the
+      // nose as it gets louder, − closes it; the Throat page's Soft palate is where it starts
+      name: "Mod",
+      encoders: [
+        {
+          label: "Env → Nose",
+          value: mod.velum,
+          min: -1,
+          max: 1,
+          onChange: mod.setVelum,
+          format: (v) => (Math.abs(v) < 0.01 ? { value: "Off", unit: "" } : { value: `${v > 0 ? "+" : "−"}${Math.round(Math.abs(v) * 100)}`, unit: "%" }),
+        },
       ],
     },
     {

@@ -1,7 +1,8 @@
 /**
  * MPE input, the touch curve and the plate reverb: plain TypeScript, no wasm needed.
  */
-import { expect, test } from "bun:test";
+import { modVelum, VELUM_MAX, VELUM_MIN } from "../src/ui/velumMod.ts";
+import { describe, expect, test } from "bun:test";
 import { connectMidi, type MpeVoice } from "../src/ui/midi.ts";
 import { DEFAULT_TOUCH, touchToBreath } from "../src/ui/touch.ts";
 import { PlateReverb } from "../src/audio/plateReverb.ts";
@@ -476,4 +477,18 @@ test("eight voices: eight held notes, one per voice; a ninth, higher note takes 
   const after = assignSlots(slots, [...held, ninth]).map((x) => x?.note);
   expect(after).toContain(86);
   expect(after).not.toContain(60);
+});
+
+describe("volume envelope → soft palate", () => {
+  test("depth 0 or silence leaves the dial's setting", () => {
+    expect(modVelum(0.3, 0, 1)).toBeCloseTo(0.3);
+    expect(modVelum(0.3, 0.8, 0)).toBeCloseTo(0.3);
+  });
+  test("positive depth opens with loudness, negative closes, both inside the dial's range", () => {
+    expect(modVelum(-0.25, 1, 1)).toBeCloseTo(VELUM_MAX);
+    expect(modVelum(-0.25, 0.5, 0.5)).toBeGreaterThan(0);
+    expect(modVelum(1.2, -1, 1)).toBeCloseTo(VELUM_MIN);
+    expect(modVelum(0.5, 1, 2)).toBe(VELUM_MAX);
+    expect(modVelum(0, -1, 0.9)).toBe(VELUM_MIN);
+  });
 });
