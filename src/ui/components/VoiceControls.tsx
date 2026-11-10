@@ -116,8 +116,13 @@ export function VoiceToggles() {
   const setSource = useStore((st) => st.setSource);
   const hold = useStore((st) => st.hold);
   const setHold = useStore((st) => st.setHold);
+  const two = useStore((st) => st.twoVoices);
+  const setTwo = useStore((st) => st.setTwoVoices);
   return (
     <>
+      <Chip on={two} onClick={() => setTwo(!two)}>
+        2 voices
+      </Chip>
       <Chip on={hold} onClick={() => setHold(!hold)}>
         Hold breath
       </Chip>

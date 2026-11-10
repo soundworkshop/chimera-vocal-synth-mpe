@@ -115,3 +115,31 @@ test("distortion: clean at drive 0, saturating and lopsided at full drive, level
   expect(out).toBeGreaterThan(0.1);
   expect(out).toBeLessThan(0.4);
 });
+
+test("two voices: each note keeps its voice, high-note priority when both are busy", async () => {
+  const { assignSlots } = await import("../src/ui/voiceSlots.ts");
+  let serial = 0;
+  const v = (id: string, note: number) => ({ id, note, velocity: 100, bend: 0, pressure: 0.5, serial: ++serial });
+  const slots: (string | null)[] = [null, null];
+  const notes = (p: ReturnType<typeof assignSlots>) => p.map((x) => x?.note ?? null);
+  const a = v("ch2", 60), b = v("ch3", 67);
+  expect(notes(assignSlots(slots, [a]))).toEqual([60, null]);
+  expect(notes(assignSlots(slots, [a, b]))).toEqual([60, 67]);
+  // bends crossing don't swap voices
+  const aUp = { ...a, note: 70 };
+  expect(notes(assignSlots(slots, [aUp, b]))).toEqual([70, 67]);
+  // a third, higher note takes the voice with the lowest note
+  const c = v("ch4", 72);
+  expect(notes(assignSlots(slots, [aUp, b, c]))).toEqual([70, 72]);
+  // a third, lower note waits…
+  const d = v("ch5", 50);
+  expect(notes(assignSlots(slots, [aUp, c, d, b]))).toEqual([70, 72]);
+  // …and takes the voice that lets go
+  expect(notes(assignSlots(slots, [c, d, b]))).toEqual([67, 72]);
+  expect(notes(assignSlots(slots, []))).toEqual([null, null]);
+  // one voice: plain high-note priority, and the lower note returns on release
+  const one: (string | null)[] = [null];
+  expect(notes(assignSlots(one, [a]))).toEqual([60]);
+  expect(notes(assignSlots(one, [a, b]))).toEqual([67]);
+  expect(notes(assignSlots(one, [a]))).toEqual([60]);
+});

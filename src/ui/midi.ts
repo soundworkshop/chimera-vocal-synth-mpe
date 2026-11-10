@@ -14,6 +14,8 @@ export type MidiStatus = "off" | "connecting" | "on" | "unsupported" | "denied";
 
 /** a note held on one channel, with that channel's expression */
 export interface MpeVoice {
+  /** the channel holding it ("input id \0 channel") */
+  id: string;
   note: number;
   velocity: number;
   /** pitch bend in semitones */
@@ -72,8 +74,8 @@ function channel(owner: string): Channel {
 function emit(): void {
   if (!handlers?.expression) return;
   const voices: MpeVoice[] = [];
-  for (const c of channels.values())
-    if (c.note !== null) voices.push({ note: c.note, velocity: c.velocity, bend: c.bend * c.range, pressure: c.pressure, serial: c.serial });
+  for (const [id, c] of channels)
+    if (c.note !== null) voices.push({ id, note: c.note, velocity: c.velocity, bend: c.bend * c.range, pressure: c.pressure, serial: c.serial });
   handlers.expression(voices, sendsPressure);
 }
 

@@ -26,6 +26,17 @@ export class AudioEngine {
   /** plate reverb after the master (the analysers read the dry voice) */
   private reverb: AudioWorkletNode | null = null;
   private reverbSettings: ReverbSettings = { ...DEFAULT_REVERB };
+  /**
+   * Second voice (two-voice MPE): another engine instance, created only while two voices are on.
+   * It mirrors the first voice's body, articulation and tone (same mouth, same formants); only
+   * its pitch, glide, breath and gate are its own. Both feed the same distortion and reverb.
+   */
+  private node2: AudioWorkletNode | null = null;
+  private twoVoices = false;
+  private mirrorBody: BodyMix | null = null;
+  private mirrorArtic: Partial<HumanArtic> = {};
+  private mirrorTipFree: boolean | undefined;
+  private mirrorSource: Partial<VoiceSource> = {};
   /** distortion between the voice (or its close-mic chain) and the master */
   private dist: { input: GainNode; shaper: WaveShaperNode; tone: BiquadFilterNode; makeup: GainNode; wet: GainNode; dry: GainNode; level: GainNode } | null = null;
   private distSettings: DistortionSettings = { ...DEFAULT_DISTORTION };
@@ -128,6 +139,7 @@ export class AudioEngine {
     shelf.connect(presence).connect(comp).connect(makeup).connect(dist.input);
     this.micIn = shelf;
     node.connect(this.micOn ? shelf : dist.input);
+    if (this.twoVoices) this.createVoice2();
     // the reverb is optional: if its module fails to load, the voice still plays dry
     try {
       await ctx.audioWorklet.addModule(reverbUrl);
@@ -224,6 +236,10 @@ export class AudioEngine {
     if (!this.node || !this.dist || !this.micIn) return;
     this.node.disconnect();
     this.node.connect(on ? this.micIn : this.dist.input);
+    if (this.node2) {
+      this.node2.disconnect();
+      this.node2.connect(on ? this.micIn : this.dist.input);
+    }
   }
 
   setBeat(m: { steps?: import("../wasm/types.ts").BeatStep[] | (import("../wasm/types.ts").BeatStep | null)[]; bpm?: number; swing?: number; playing?: boolean }): void {
@@ -249,7 +265,44 @@ export class AudioEngine {
   }
 
   setBody(body: BodyMix): void {
+    this.mirrorBody = body;
     this.send({ type: "body", body });
+    this.node2?.port.postMessage({ type: "body", body } satisfies ToWorklet);
+  }
+
+  /** Turn the second voice on or off (created now, or when audio starts). */
+  setTwoVoices(on: boolean): void {
+    this.twoVoices = on;
+    if (!this.ctx) return;
+    if (on && !this.node2) this.createVoice2();
+    else if (!on && this.node2) {
+      this.node2.port.onmessage = null;
+      this.node2.disconnect();
+      this.node2 = null;
+    }
+  }
+
+  private createVoice2(): void {
+    const ctx = this.ctx, dist = this.dist;
+    if (!ctx || !dist || this.node2) return;
+    const node = new AudioWorkletNode(ctx, "chimera", { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2], processorOptions: { module: chimeraModule() } });
+    node.port.onmessage = (e: MessageEvent<FromWorklet>) => {
+      if (e.data.type === "error") console.error("voice 2:", e.data.message);
+    };
+    const send = (m: ToWorklet) => node.port.postMessage(m);
+    // nothing reads its telemetry: skip the work
+    send({ type: "telemetry", enabled: false });
+    if (this.mirrorBody) send({ type: "body", body: this.mirrorBody });
+    send({ type: "artic", values: this.mirrorArtic, tipFree: this.mirrorTipFree });
+    send({ type: "source", values: this.mirrorSource });
+    send({ type: "gate", level: 0 });
+    node.connect(this.micOn && this.micIn ? this.micIn : dist.input);
+    this.node2 = node;
+  }
+
+  /** The second voice's breath gate (0 shut … 1 open). */
+  gate2(level: number): void {
+    this.node2?.port.postMessage({ type: "gate", level } satisfies ToWorklet);
   }
 
   gate(level: number): void {
@@ -308,7 +361,11 @@ export class AudioEngine {
    * than 60 Hz, and frame-rate steps would zipper. Drops the same keys from the frame's pending
    * batch, which would otherwise arrive later and undo these.
    */
-  setSourceNow(values: Partial<VoiceSource>): void {
+  setSourceNow(values: Partial<VoiceSource>, voice: 0 | 1 = 0): void {
+    if (voice === 1) {
+      this.node2?.port.postMessage({ type: "source", values } satisfies ToWorklet);
+      return;
+    }
     if (this.pendingSource) for (const k of Object.keys(values) as (keyof VoiceSource)[]) delete this.pendingSource[k];
     this.send({ type: "source", values });
   }
@@ -324,12 +381,22 @@ export class AudioEngine {
     const flush = () => {
       this.flushScheduled = false;
       if (this.pendingArtic || this.pendingTipFree !== undefined) {
-        this.send({ type: "artic", values: this.pendingArtic ?? {}, tipFree: this.pendingTipFree });
+        const m: ToWorklet = { type: "artic", values: this.pendingArtic ?? {}, tipFree: this.pendingTipFree };
+        this.send(m);
+        this.node2?.port.postMessage(m);
+        this.mirrorArtic = { ...this.mirrorArtic, ...m.values };
+        if (m.tipFree !== undefined) this.mirrorTipFree = m.tipFree;
         this.pendingArtic = null;
         this.pendingTipFree = undefined;
       }
       if (this.pendingSource) {
         this.send({ type: "source", values: this.pendingSource });
+        // the second voice shares the tone, not the pitch, glide or breath
+        const { f0: _f, pressure: _p, glide: _g, ...shared } = this.pendingSource;
+        if (Object.keys(shared).length) {
+          this.mirrorSource = { ...this.mirrorSource, ...shared };
+          this.node2?.port.postMessage({ type: "source", values: shared } satisfies ToWorklet);
+        }
         this.pendingSource = null;
       }
       if (this.pendingCParams) {

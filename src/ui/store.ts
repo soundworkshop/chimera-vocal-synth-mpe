@@ -12,6 +12,7 @@ import { connectMidi, disconnectMidi, type MidiStatus, type MpeVoice } from "./m
 import { DEFAULT_REVERB, type ReverbSettings } from "../audio/plateReverb.ts";
 import { DEFAULT_DISTORTION, type DistortionSettings } from "../audio/distortion.ts";
 import { DEFAULT_TOUCH, touchToBreath, type TouchCurve } from "./touch.ts";
+import { assignSlots } from "./voiceSlots.ts";
 export { touchToBreath };
 
 /** the live controller, for the curve display: pressure 0..1, or null when nothing is held */
@@ -23,14 +24,16 @@ interface Saved {
   touch: TouchCurve;
   reverb: ReverbSettings;
   distortion: DistortionSettings;
+  /** two-voice MPE (a second engine; about twice the CPU) */
+  twoVoices: boolean;
 }
 function loadSaved(): Saved {
   try {
     const raw = typeof localStorage !== "undefined" ? localStorage.getItem(SAVED_KEY) : null;
     const v = raw ? JSON.parse(raw) : {};
-    return { touch: { ...DEFAULT_TOUCH, ...v.touch }, reverb: { ...DEFAULT_REVERB, ...v.reverb }, distortion: { ...DEFAULT_DISTORTION, ...v.distortion } };
+    return { touch: { ...DEFAULT_TOUCH, ...v.touch }, reverb: { ...DEFAULT_REVERB, ...v.reverb }, distortion: { ...DEFAULT_DISTORTION, ...v.distortion }, twoVoices: v.twoVoices ?? true };
   } catch {
-    return { touch: { ...DEFAULT_TOUCH }, reverb: { ...DEFAULT_REVERB }, distortion: { ...DEFAULT_DISTORTION } };
+    return { touch: { ...DEFAULT_TOUCH }, reverb: { ...DEFAULT_REVERB }, distortion: { ...DEFAULT_DISTORTION }, twoVoices: true };
   }
 }
 function save(v: Saved): void {
@@ -44,6 +47,7 @@ const saved = loadSaved();
 // only stored until the audio starts (no engine call)
 engine.setReverb(saved.reverb);
 engine.setDistortion(saved.distortion);
+engine.setTwoVoices(saved.twoVoices);
 
 export type Mode = "play" | "speak" | "sing" | "bestiary" | "beatbox";
 
@@ -123,6 +127,8 @@ interface State {
   setReverb: (v: Partial<ReverbSettings>) => void;
   distortion: DistortionSettings;
   setDistortion: (v: Partial<DistortionSettings>) => void;
+  twoVoices: boolean;
+  setTwoVoices: (on: boolean) => void;
   setView: (v: Partial<ViewOptions>) => void;
 }
 
@@ -162,11 +168,28 @@ let mpeRestore: ReturnType<typeof setTimeout> | null = null;
 let mpeFrame = 0;
 let mpeF0 = 0;
 
+/** each voice's MPE channel (index 0: the main voice, 1: the second) */
+let slots: (string | null)[] = [null];
+let gate2Open = false;
+
+function setGate2(open: boolean): void {
+  if (open === gate2Open) return;
+  gate2Open = open;
+  engine.gate2(open ? 1 : 0);
+}
+
+/** Forget the voices' notes and close the second voice (mode switch, MIDI off). */
+function resetMpe(): void {
+  slots = slots.map(() => null);
+  setGate2(false);
+  mpeLive.pressure = null;
+}
+
 function applyMpe(voices: MpeVoice[], sendsPressure: boolean): void {
   const s = useStore.getState();
   if (s.mode !== "play") return;
   if (!voices.length) {
-    mpeLive.pressure = null;
+    resetMpe();
     if (mpeActive && !mpeRestore)
       mpeRestore = setTimeout(() => {
         mpeRestore = null;
@@ -178,15 +201,23 @@ function applyMpe(voices: MpeVoice[], sendsPressure: boolean): void {
   }
   if (mpeRestore) clearTimeout(mpeRestore), (mpeRestore = null);
   mpeActive = true;
-  // high-note priority; among equal notes, the latest
-  let top = voices[0];
-  for (const v of voices) if (v.note > top.note || (v.note === top.note && v.serial > top.serial)) top = v;
-  // no pressure from this controller: the knob's breath, as before; pressure not yet sent for
-  // this note (it follows the note-on): silent until it arrives
-  const amount = top.pressure === null ? (sendsPressure ? 0 : 1) : touchToBreath(top.pressure, s.touch);
-  mpeLive.pressure = top.pressure ?? (sendsPressure ? 0 : null);
-  mpeF0 = midiToHz(top.note + top.bend);
-  engine.setSourceNow({ f0: mpeF0, glide: MPE_GLIDE, pressure: amount * s.source.pressure });
+  const n = s.twoVoices ? 2 : 1;
+  if (slots.length !== n) slots = Array.from({ length: n }, (_, i) => slots[i] ?? null);
+  const playing = assignSlots(slots, voices);
+  playing.forEach((v, i) => {
+    const voice = i as 0 | 1;
+    // a voice with no note: silent (its gate stays open, so the next note starts at once)
+    if (!v) return engine.setSourceNow({ pressure: 0, glide: MPE_GLIDE }, voice);
+    // no pressure from this controller: the knob's breath, as before; pressure not yet sent for
+    // this note (it follows the note-on): silent until it arrives
+    const amount = v.pressure === null ? (sendsPressure ? 0 : 1) : touchToBreath(v.pressure, s.touch);
+    const f0 = midiToHz(v.note + v.bend);
+    engine.setSourceNow({ f0, glide: MPE_GLIDE, pressure: amount * s.source.pressure }, voice);
+    if (i === 0) mpeF0 = f0;
+  });
+  setGate2(n === 2);
+  const main = playing[0] ?? playing[1];
+  mpeLive.pressure = main ? (main.pressure ?? (sendsPressure ? 0 : null)) : null;
   if (!mpeFrame)
     mpeFrame = requestAnimationFrame(() => {
       mpeFrame = 0;
@@ -196,7 +227,7 @@ function applyMpe(voices: MpeVoice[], sendsPressure: boolean): void {
 
 const saveAll = () => {
   const s = useStore.getState();
-  save({ touch: s.touch, reverb: s.reverb, distortion: s.distortion });
+  save({ touch: s.touch, reverb: s.reverb, distortion: s.distortion, twoVoices: s.twoVoices });
 };
 
 let startPromise: Promise<void> | null = null;
@@ -233,6 +264,8 @@ export const useStore = create<State>((set, get) => ({
     session++;
     // notes held across the switch would keep breathing into the other voice
     set({ mode: m, heldNotes: [] });
+    // the second voice only plays MPE in Play mode
+    resetMpe();
     // speech belongs to Speak: under a creature the human clock stops and it would resume later
     if (prev === "speak" || m === "bestiary") stopSpeaking();
     if ((prev === "bestiary") !== (m === "bestiary")) {
@@ -440,6 +473,13 @@ export const useStore = create<State>((set, get) => ({
   touch: saved.touch,
   setTouch: (v) => {
     set((s) => ({ touch: { ...s.touch, ...v } }));
+    saveAll();
+  },
+  twoVoices: saved.twoVoices,
+  setTwoVoices: (on) => {
+    resetMpe();
+    set({ twoVoices: on });
+    engine.setTwoVoices(on);
     saveAll();
   },
   distortion: saved.distortion,
