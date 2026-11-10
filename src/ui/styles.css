@@ -1666,6 +1666,12 @@ button.ghost:hover,
   cursor: pointer;
 }
 
+.mic-readout {
+  font-size: 11px;
+  color: var(--green);
+  white-space: nowrap;
+}
+
 .mic-btn.on {
   border-color: var(--green);
   color: var(--green);

@@ -218,6 +218,7 @@ const MIC_STATUS: Record<string, string> = { off: "Mic off: turn on Mic words", 
 function MicPanel() {
   const m = useMic();
   const meter = useRef<HTMLDivElement>(null);
+  const readout = useRef<HTMLSpanElement>(null);
   const gateRef = useRef(m.gate);
   gateRef.current = m.gate;
   useEffect(() => {
@@ -230,6 +231,8 @@ function MicPanel() {
       el.style.setProperty("--level", String(u));
       el.style.setProperty("--gate", String(Math.min(1, Math.max(0, (gateRef.current + 80) / 70))));
       el.classList.toggle("over", micLive.active);
+      // what the tracker hears right now (your voice, before calibration)
+      if (readout.current) readout.current.textContent = micLive.active ? `F1 ${Math.round(micLive.f1)} · F2 ${Math.round(micLive.f2)} Hz` : "";
     };
     draw();
     return () => cancelAnimationFrame(raf);
@@ -243,7 +246,7 @@ function MicPanel() {
         <span className="mic-meter-gate" />
       </div>
       <div className="mic-actions">
-        {m.prompt ? (
+        {m.sampling ? null : m.prompt ? (
           <button type="button" className="mic-btn" onClick={m.cancelCalibration}>
             Cancel
           </button>
@@ -252,6 +255,10 @@ function MicPanel() {
             Calibrate
           </button>
         )}
+        <button type="button" className="mic-btn" disabled={!on || m.sampling || !!m.prompt} onClick={m.saveSample} title="Save 8 s of the raw mic to send for diagnosis">
+          Save sample
+        </button>
+        <span className="mic-readout" ref={readout} />
         {m.inputs.length > 1 && (
           <select className="mic-input" value={m.deviceId} onChange={(e) => m.set({ deviceId: e.target.value })} aria-label="Microphone">
             <option value="">System default</option>

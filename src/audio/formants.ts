@@ -265,3 +265,15 @@ export function fitCalibration(user: { f1: number; f2: number }[], model: { f1: 
 export function applyCalibration(f1: number, f2: number, c: FormantCalibration): { f1: number; f2: number } {
   return { f1: Math.exp(c.a1 * Math.log(f1) + c.b1), f2: Math.exp(c.a2 * Math.log(f2) + c.b2) };
 }
+
+/**
+ * A capture whose vowels aren't in their places (ee, ah, oo): "oo" must have a much lower F2 than
+ * "ee" (else the tracker took F3 for its F2), and "ah" the highest F1.
+ */
+export function calibrationProblem(got: { f1: number; f2: number }[]): string | null {
+  const [ee, ah, oo] = got;
+  const fmt = (v: { f1: number; f2: number }) => `F1 ${Math.round(v.f1)}, F2 ${Math.round(v.f2)} Hz`;
+  if (!(oo.f2 < ee.f2 * 0.75)) return `Calibration not saved: your “oo” (${fmt(oo)}) looked too much like your “ee” (${fmt(ee)}). Try a rounder, darker “oo”, closer to the mic.`;
+  if (!(ah.f1 > Math.max(ee.f1, oo.f1) * 1.15)) return `Calibration not saved: your “ah” (${fmt(ah)}) wasn't open enough. Try a wide-open “ah”.`;
+  return null;
+}

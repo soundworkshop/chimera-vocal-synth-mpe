@@ -354,3 +354,11 @@ test("formant table: the measured inverse lands on target where a straight blend
   const err = (f: number[]) => Math.hypot(Math.log(f[0] / mid[0]) * 2.2, Math.log(f[1] / mid[1]));
   expect(err(naive)).toBeGreaterThan(3 * err(got));
 });
+
+test("calibration: refuses a capture where 'oo' was tracked like 'ee' (F3 taken for F2)", async () => {
+  const { calibrationProblem } = await import("../src/audio/formants.ts");
+  const ee = { f1: 320, f2: 2250 }, ah = { f1: 730, f2: 1150 };
+  expect(calibrationProblem([ee, ah, { f1: 340, f2: 880 }])).toBe(null);
+  expect(calibrationProblem([ee, ah, { f1: 340, f2: 2150 }])).toMatch(/oo/);
+  expect(calibrationProblem([ee, { f1: 360, f2: 1300 }, { f1: 340, f2: 880 }])).toMatch(/ah/);
+});

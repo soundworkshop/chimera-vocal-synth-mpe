@@ -33,6 +33,11 @@ export class MicInput {
     this.source.connect(this.analyser).connect(this.sink).connect(ctx.destination);
   }
 
+  /** The raw microphone stream (for saving a sample), or null when closed. */
+  get mediaStream(): MediaStream | null {
+    return this.stream;
+  }
+
   /** The newest samples (the analyser's window), or null when closed. */
   read(): Float32Array | null {
     if (!this.analyser) return null;

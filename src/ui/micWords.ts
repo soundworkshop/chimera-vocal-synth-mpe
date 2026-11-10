@@ -14,7 +14,7 @@ import { MicInput, listInputs } from "../audio/micInput.ts";
 import { VoiceGate } from "../audio/voiceGate.ts";
 import { ConsonantDetector } from "../audio/consonants.ts";
 import { hissGestures, stopGestures } from "./consonantGestures.ts";
-import { analyzeFormants, applyCalibration, fitCalibration, FormantFollower, IDENTITY_CALIBRATION, median, type FormantCalibration } from "../audio/formants.ts";
+import { analyzeFormants, applyCalibration, calibrationProblem, fitCalibration, FormantFollower, IDENTITY_CALIBRATION, median, type FormantCalibration } from "../audio/formants.ts";
 import { useStore } from "./store.ts";
 import { getModel } from "./useModel.ts";
 import { formantTable as tableFor } from "./formantTable.ts";
@@ -48,6 +48,9 @@ interface MicState extends MicSettings {
   set: (v: Partial<MicSettings>) => void;
   calibrate: () => void;
   cancelCalibration: () => void;
+  /** recording a raw mic sample to send for diagnosis */
+  sampling: boolean;
+  saveSample: () => void;
 }
 
 const KEY = "chimera-mic-settings";
@@ -183,11 +186,36 @@ export const useMic = create<MicState>((set, get) => ({
   calibrate: () => {
     if (get().status !== "on") return;
     cal = { step: 0, f1: [], f2: [], got: [] };
-    set({ prompt: STEPS[0].prompt });
+    set({ prompt: STEPS[0].prompt, problem: null });
   },
   cancelCalibration: () => {
     cal = null;
     set({ prompt: null });
+  },
+  sampling: false,
+  saveSample: () => {
+    const stream = mic.mediaStream;
+    if (!stream || get().sampling) return;
+    // the raw mic, as heard by the tracker (no processing), high-bitrate so formants survive
+    const type = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"].find((t) => MediaRecorder.isTypeSupported(t)) ?? "";
+    const rec = new MediaRecorder(stream, { mimeType: type, audioBitsPerSecond: 256_000 });
+    const chunks: Blob[] = [];
+    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    rec.onstop = () => {
+      set({ sampling: false, prompt: null });
+      const t = rec.mimeType || type || "audio/webm";
+      const url = URL.createObjectURL(new Blob(chunks, { type: t }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `mic-sample-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.${t.startsWith("audio/mp4") ? "m4a" : "webm"}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    };
+    set({ sampling: true, prompt: "Recording 8 s: say “oo”, “ee”, “ah”, then “oo” again, each held ~1 s" });
+    rec.start();
+    setTimeout(() => rec.state !== "inactive" && rec.stop(), 8000);
   },
 }));
 
@@ -271,7 +299,13 @@ function calibrateStep(voiced: boolean, f1: number, f2: number): void {
     useMic.setState({ prompt: null });
     return;
   }
+  const problem = calibrationProblem(got);
+  if (problem) {
+    // keep the old calibration: a capture with a formant mistaken would bake the mistake in
+    useMic.setState({ prompt: null, problem });
+    return;
+  }
   useMic.getState().set({ calibration: fitCalibration(got, target) });
-  useMic.setState({ prompt: null, calibrated: true });
+  useMic.setState({ prompt: null, problem: null, calibrated: true });
   follower.reset();
 }
