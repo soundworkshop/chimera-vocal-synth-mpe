@@ -130,13 +130,15 @@ export function VoiceToggles() {
   const two = useStore((st) => st.twoVoices);
   const setTwo = useStore((st) => st.setTwoVoices);
   const micStatus = useMic((m) => m.status);
+  const micProblem = useMic((m) => m.problem);
   const setMic = useMic((m) => m.setOn);
   const micOn = micStatus === "on" || micStatus === "starting";
   return (
     <>
-      <Chip on={micOn} onClick={() => setMic(!micOn)}>
-        Mic words
+      <Chip on={micOn} onClick={() => setMic(!micOn)} title={micProblem ?? (micOn ? "Stop listening" : "Your vowels shape the mouth (asks for the microphone)")}>
+        {micStatus === "starting" ? "Mic words…" : micStatus === "denied" || micStatus === "error" ? "Mic words ⚠" : "Mic words"}
       </Chip>
+      {micProblem && <span className="mic-problem" role="alert">{micProblem}</span>}
       <Chip on={two} onClick={() => setTwo(!two)}>
         2 voices
       </Chip>
@@ -229,7 +231,7 @@ function MicPanel() {
   const on = m.status === "on";
   return (
     <div className="mic-panel">
-      <div className="mic-status">{m.prompt ?? (on ? (m.calibrated ? "Listening" : "Listening: calibrate for your voice") : MIC_STATUS[m.status])}</div>
+      <div className="mic-status">{m.prompt ?? m.problem ?? (on ? (m.calibrated ? "Listening" : "Listening: calibrate for your voice") : MIC_STATUS[m.status])}</div>
       <div className="mic-meter" ref={meter} aria-hidden="true">
         <span className="mic-meter-level" />
         <span className="mic-meter-gate" />

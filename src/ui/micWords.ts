@@ -27,6 +27,8 @@ interface MicSettings {
 
 interface MicState extends MicSettings {
   status: MicStatus;
+  /** why the mic isn't on, in words the performer can act on (null when fine) */
+  problem: string | null;
   /** shown while calibrating */
   prompt: string | null;
   calibrated: boolean;
@@ -60,6 +62,9 @@ function save(s: MicSettings): void {
 export const micLive = { db: -120, f1: 0, f2: 0, active: false };
 
 const mic = new MicInput();
+/** bumped by every on/off, so a slow permission answer for an older attempt is ignored */
+let attempt = 0;
+let waitTimer: ReturnType<typeof setTimeout> | undefined;
 let raf = 0;
 let lastT = 0;
 /** smoothed log formants (model space) */
@@ -80,32 +85,59 @@ const saved = load();
 export const useMic = create<MicState>((set, get) => ({
   ...saved,
   status: "off",
+  problem: null,
   prompt: null,
   calibrated: saved.calibration.a1 !== 1 || saved.calibration.b1 !== 0 || saved.calibration.a2 !== 1 || saved.calibration.b2 !== 0,
   inputs: [],
   setOn: (on) => {
+    attempt++;
+    clearTimeout(waitTimer);
     if (!on) {
       stop();
-      set({ status: "off", prompt: null });
+      set({ status: "off", prompt: null, problem: null });
       cal = null;
       return;
     }
-    if (get().status === "on" || get().status === "starting") return;
-    set({ status: "starting" });
+    if (get().status === "on") return;
+    const mine = attempt;
+    set({ status: "starting", problem: null });
+    // Chrome sometimes asks quietly (an icon in the address bar, no pop-up): say where to look
+    waitTimer = setTimeout(() => {
+      if (attempt === mine && get().status === "starting") set({ problem: "Waiting for permission: click the microphone icon at the right of the address bar and allow it" });
+    }, 4000);
     void (async () => {
       try {
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error("This browser can't use a microphone here (it needs https)");
         await useStore.getState().start();
-        if (!engine.ctx) throw new Error("no audio");
+        if (!engine.ctx) throw new Error("Audio didn't start");
         await mic.open(engine.ctx, get().deviceId || undefined);
-        set({ status: "on", inputs: await listInputs() });
+        // turned off (or retried) while the browser was asking
+        if (attempt !== mine) return void mic.close();
+        clearTimeout(waitTimer);
+        set({ status: "on", problem: null, inputs: await listInputs() });
         s1 = s2 = 0;
         lastT = performance.now();
         cancelAnimationFrame(raf);
         raf = requestAnimationFrame(tick);
       } catch (e) {
-        const denied = e instanceof DOMException && (e.name === "NotAllowedError" || e.name === "SecurityError");
+        if (attempt !== mine) return;
+        clearTimeout(waitTimer);
         console.error("mic:", e);
-        set({ status: denied ? "denied" : "error" });
+        const name = e instanceof DOMException ? e.name : "";
+        const msg = e instanceof Error ? e.message : String(e);
+        const problem =
+          name === "NotAllowedError" && /system/i.test(msg)
+            ? "macOS is blocking Chrome's microphone: System Settings → Privacy & Security → Microphone → turn on Google Chrome, then quit and reopen Chrome"
+            : name === "NotAllowedError" || name === "SecurityError"
+              ? "Microphone blocked for this site: click the icon at the left of the address bar → Site settings → Microphone → Allow, then reload"
+              : name === "NotFoundError" || name === "OverconstrainedError"
+                ? "No microphone found: check the earbuds are plugged in (or choose System default)"
+                : name === "NotReadableError"
+                  ? "The microphone is busy or blocked by macOS: check System Settings → Privacy & Security → Microphone"
+                  : msg;
+        // a chosen input that has gone away: fall back to the default next time
+        if (name === "NotFoundError" || name === "OverconstrainedError") get().set({ deviceId: "" });
+        set({ status: name === "NotAllowedError" || name === "SecurityError" ? "denied" : "error", problem });
       }
     })();
   },
