@@ -220,3 +220,79 @@ test("voice gate: follows a word, ignores its fading end, the noise floor and a 
   const hum = run(-44, 6);
   expect(hum.slice(-60).some(Boolean)).toBe(false);
 });
+
+test("consonants: s, ʃ, f held as hiss, t and k bursts; no trigger on vowels, pauses or a vowel onset", async () => {
+  const { ConsonantDetector } = await import("../src/audio/consonants.ts");
+  const sr = 48000;
+  let seed = 3;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
+  const amp = (d: number) => Math.pow(10, d / 20);
+  const norm = (x: Float64Array, d: number) => {
+    const rms = Math.sqrt(x.reduce((s, v) => s + v * v, 0) / x.length);
+    return x.map((v) => (v / rms) * amp(d));
+  };
+  const band = (n: number, lo: number, hi: number, d: number) => {
+    const x = Float64Array.from({ length: n }, rnd), out = new Float64Array(n), c = Math.sqrt(lo * hi);
+    for (const f of [c * 0.9, c * 1.1]) {
+      const r = Math.exp((-Math.PI * (hi - lo)) / sr), k = 2 * r * Math.cos((2 * Math.PI * f) / sr);
+      for (let i = 0, y1 = 0, y2 = 0; i < n; i++) {
+        const y = x[i] + k * y1 - r * r * y2;
+        (y2 = y1), (y1 = y), (out[i] += y);
+      }
+    }
+    return norm(out, d);
+  };
+  const vowel = (n: number, d: number) => {
+    let x = new Float64Array(n);
+    for (let i = 0; i < n; i++) x[i] = i % 400 === 0 ? 1 : 0;
+    for (let i = 0, y = 0; i < n; i++) x[i] = y = x[i] + 0.987 * y;
+    [[730, 80], [1100, 100], [2450, 150]].forEach(([F, bw]) => {
+      const r = Math.exp((-Math.PI * bw) / sr), c = 2 * r * Math.cos((2 * Math.PI * F) / sr), y = new Float64Array(n);
+      for (let i = 0; i < n; i++) y[i] = x[i] + c * (i > 0 ? y[i - 1] : 0) - r * r * (i > 1 ? y[i - 2] : 0);
+      x = y;
+    });
+    return norm(x, d);
+  };
+  const quiet = (n: number) => Float64Array.from({ length: n }, () => 0);
+  const ms = (t: number) => Math.round((t * sr) / 1000);
+  const parts = [
+    quiet(ms(400)), vowel(ms(300), -28),
+    band(ms(200), 4500, 9000, -36), vowel(ms(250), -28), // s
+    band(ms(200), 2200, 4200, -36), vowel(ms(250), -28), // ʃ
+    Float64Array.from({ length: ms(180) }, () => rnd() * amp(-52)), vowel(ms(250), -28), // f
+    quiet(ms(70)), band(ms(8), 3500, 8000, -30), vowel(ms(250), -28), // t
+    quiet(ms(70)), band(ms(10), 1700, 2800, -32), vowel(ms(250), -28), // k
+    quiet(ms(500)), vowel(ms(300), -28), quiet(ms(400)), // a vowel after a pause: nothing
+  ];
+  const total = parts.reduce((s, x) => s + x.length, 0);
+  const sig = new Float32Array(total);
+  let off = 0;
+  for (const x of parts) {
+    sig.set(Float32Array.from(x, (v) => v + rnd() * amp(-68)), off);
+    off += x.length;
+  }
+  const det = new ConsonantDetector();
+  const got: string[] = [];
+  for (let end = 2048; end <= total; end += 800)
+    for (const e of det.update(sig.subarray(end - 2048, end), sr, 800 / sr, -50)) got.push(e.type === "hissEnd" ? "end" : `${e.type}:${e.ipa}`);
+  expect(got).toEqual(["hissStart:s", "end", "hissStart:ʃ", "end", "hissStart:f", "end", "stop:t", "stop:k"]);
+});
+
+test("consonant gestures: a hiss owns its constriction until released, a stop closes and lets go", async () => {
+  const { hissGestures, stopGestures } = await import("../src/ui/consonantGestures.ts");
+  const male = { female: 0, child: 0 };
+  const s = hissGestures("s", male, 1_000_001);
+  expect(s.every((g) => g.tag === 1_000_001)).toBe(true);
+  const main = s.find((g) => g.label === "s" && g.strength === 40)!;
+  expect(main.targets.ttY).toBeCloseTo(9.111, 3); // the body's calibrated constriction
+  expect(s.some((g) => g.targets.abduction! > 0)).toBe(true); // voiceless
+  const f = hissGestures("f", { female: 1, child: 0 }, 1_000_002).find((g) => g.strength === 40)!;
+  expect(f.targets.lipAp).toBeCloseTo(0.013, 3);
+  const t = stopGestures("t", male);
+  const close = t.find((g) => g.strength === 40)!;
+  expect(close.targets.ttY).toBeCloseTo(9.68, 2);
+  expect(close.t1).toBeLessThan(0.06);
+  expect(t.every((g) => g.tag === undefined)).toBe(true);
+  const k = stopGestures("k", male).find((g) => g.strength === 40)!;
+  expect(k.targets.tbY).toBeCloseTo(8.35, 2);
+});

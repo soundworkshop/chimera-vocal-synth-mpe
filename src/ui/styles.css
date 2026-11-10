@@ -1666,6 +1666,17 @@ button.ghost:hover,
   cursor: pointer;
 }
 
+.mic-btn.on {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.mic-heard {
+  min-width: 1.2em;
+  color: var(--amber);
+  font-size: 16px;
+}
+
 .mic-btn:disabled {
   opacity: 0.4;
   cursor: default;

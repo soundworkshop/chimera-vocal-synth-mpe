@@ -84,6 +84,12 @@ export function VoiceControls() {
       panel: <MicPanel />,
     },
     {
+      // the performer's s, ʃ, f, t, k become Chimera's own (consonants.ts)
+      name: "Consonants",
+      encoders: [{ label: "Hiss", value: mic.hissSense, min: 0, max: 1, onChange: (v) => mic.set({ hissSense: v }), format: (v) => (mic.consonants ? pct(v) : { value: "Off", unit: "" }) }],
+      panel: <ConsonantPanel />,
+    },
+    {
       name: "Reverb",
       encoders: [
         { label: "Mix", value: r.mix, min: 0, max: 1, onChange: (v) => setReverb({ mix: v }), format: pct },
@@ -256,6 +262,32 @@ function MicPanel() {
             ))}
           </select>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** Consonants on/off, what they cover, and the last one heard (for a moment). */
+function ConsonantPanel() {
+  const m = useMic();
+  const heard = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    let raf = 0;
+    const draw = () => {
+      raf = requestAnimationFrame(draw);
+      if (heard.current) heard.current.textContent = micLive.consonant && performance.now() - micLive.consonantAt < 700 ? micLive.consonant : "";
+    };
+    draw();
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return (
+    <div className="mic-panel">
+      <div className="mic-status">{m.status === "on" ? "Hiss: s, sh, f · bursts: t, k (hold a note on PT2)" : "Turn on Mic words to use consonants"}</div>
+      <div className="mic-actions">
+        <button type="button" className={`mic-btn${m.consonants ? " on" : ""}`} aria-pressed={m.consonants} onClick={() => m.set({ consonants: !m.consonants })}>
+          {m.consonants ? "On" : "Off"}
+        </button>
+        <span className="mic-heard" ref={heard} aria-label="Last consonant heard" />
       </div>
     </div>
   );

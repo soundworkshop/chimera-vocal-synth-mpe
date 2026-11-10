@@ -249,11 +249,15 @@ export class AudioEngine {
   /** End the sung note (open-ended gestures) with this tag. */
   release(tag: number): void {
     this.send({ type: "release", tag });
+    // the second voice shares the mouth: it gets the same gestures (silent outside Play)
+    this.node2?.port.postMessage({ type: "release", tag } satisfies ToWorklet);
   }
 
   /** Gestures planned on the main thread, times relative to arrival + lead (live playing). */
   scheduleGestures(gestures: import("../wasm/types.ts").Gesture[], lead = 0.006): void {
-    this.send({ type: "schedule", gestures, segments: [], end: 0, id: ++this.speakId, replace: false, lead });
+    const m: ToWorklet = { type: "schedule", gestures, segments: [], end: 0, id: ++this.speakId, replace: false, lead };
+    this.send(m);
+    this.node2?.port.postMessage(m);
   }
 
   beatHit(id: string, note?: number, accent?: number): void {

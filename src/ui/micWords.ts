@@ -11,6 +11,8 @@ import { create } from "zustand";
 import { engine } from "../audio/AudioEngine.ts";
 import { MicInput, listInputs } from "../audio/micInput.ts";
 import { VoiceGate } from "../audio/voiceGate.ts";
+import { ConsonantDetector } from "../audio/consonants.ts";
+import { hissGestures, stopGestures } from "./consonantGestures.ts";
 import { analyzeFormants, applyCalibration, fitCalibration, IDENTITY_CALIBRATION, median, type FormantCalibration } from "../audio/formants.ts";
 import { useStore } from "./store.ts";
 import { getModel } from "./useModel.ts";
@@ -25,6 +27,10 @@ interface MicSettings {
   calibration: FormantCalibration;
   /** chosen input ("" = the system default) */
   deviceId: string;
+  /** hiss and bursts become Chimera's consonants (s, ʃ, f; t, k) */
+  consonants: boolean;
+  /** 0 needs a strong hiss … 1 takes a faint one */
+  hissSense: number;
 }
 
 interface MicState extends MicSettings {
@@ -42,7 +48,7 @@ interface MicState extends MicSettings {
 }
 
 const KEY = "chimera-mic-settings";
-const DEFAULTS: MicSettings = { gate: -50, smooth: 30, calibration: { ...IDENTITY_CALIBRATION }, deviceId: "" };
+const DEFAULTS: MicSettings = { gate: -50, smooth: 30, calibration: { ...IDENTITY_CALIBRATION }, deviceId: "", consonants: true, hissSense: 0.6 };
 
 function load(): MicSettings {
   try {
@@ -54,17 +60,29 @@ function load(): MicSettings {
 }
 function save(s: MicSettings): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify({ gate: s.gate, smooth: s.smooth, calibration: s.calibration, deviceId: s.deviceId }));
+    localStorage.setItem(KEY, JSON.stringify({ gate: s.gate, smooth: s.smooth, calibration: s.calibration, deviceId: s.deviceId, consonants: s.consonants, hissSense: s.hissSense }));
   } catch {
     // storage blocked: settings last until reload
   }
 }
 
 /** live readings for the meter (not React state: they change every frame) */
-export const micLive = { db: -120, f1: 0, f2: 0, active: false };
+export const micLive = { db: -120, f1: 0, f2: 0, active: false, consonant: "", consonantAt: 0 };
 
 const mic = new MicInput();
 const voiceGate = new VoiceGate();
+const consonants = new ConsonantDetector();
+/** the held hiss's gesture tag (released when the hiss ends); tags well clear of Sing's */
+let hissTag = 0;
+let nextTag = 1_000_000;
+
+function endHiss(): void {
+  if (hissTag) engine.release(hissTag);
+  hissTag = 0;
+}
+
+/** hiss sensitivity → the detector's (mid + high) / low power ratio (0.6 → 2.5) */
+const hissRatio = (sense: number) => 8 * Math.pow(0.15, Math.min(1, Math.max(0, sense)));
 /** bumped by every on/off, so a slow permission answer for an older attempt is ignored */
 let attempt = 0;
 let waitTimer: ReturnType<typeof setTimeout> | undefined;
@@ -120,6 +138,7 @@ export const useMic = create<MicState>((set, get) => ({
         set({ status: "on", problem: null, inputs: await listInputs() });
         s1 = s2 = 0;
         voiceGate.reset();
+        consonants.reset();
         lastT = performance.now();
         cancelAnimationFrame(raf);
         raf = requestAnimationFrame(tick);
@@ -166,6 +185,7 @@ export const useMic = create<MicState>((set, get) => ({
 }));
 
 function stop(): void {
+  endHiss();
   cancelAnimationFrame(raf);
   raf = 0;
   mic.close();
@@ -193,7 +213,22 @@ function tick(): void {
   if (cal) return calibrateStep(voiced, r.f1, r.f2);
 
   const st = useStore.getState();
-  if (!voiced || st.mode !== "play") return;
+  if (st.mode !== "play") return endHiss();
+  if (m.consonants) {
+    consonants.hissRatio = hissRatio(m.hissSense);
+    for (const e of consonants.update(frame, ctx.sampleRate, dt, m.gate)) {
+      if (e.type === "hissEnd") endHiss();
+      else if (e.type === "hissStart" || e.type === "hissChange") {
+        endHiss();
+        hissTag = nextTag++;
+        engine.scheduleGestures(hissGestures(e.ipa, st.body, hissTag));
+      } else engine.scheduleGestures(stopGestures(e.ipa, st.body));
+      if (e.type !== "hissEnd") (micLive.consonant = e.ipa), (micLive.consonantAt = now);
+    }
+    // a hiss's or a burst's formants are noise: the vowel holds meanwhile
+    if (consonants.hissing || consonants.recentStop) return;
+  } else endHiss();
+  if (!voiced) return;
   const t = applyCalibration(r.f1, r.f2, m.calibration);
   const l1 = Math.log(t.f1), l2 = Math.log(t.f2);
   // one-pole smoothing in log Hz; a fresh start (or a long silence) jumps straight there
