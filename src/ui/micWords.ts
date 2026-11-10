@@ -17,7 +17,7 @@ import { hissSlice, stopGestures } from "./consonantGestures.ts";
 import { analyzeFormants, applyCalibration, calibrationProblem, fitCalibration, FormantFollower, IDENTITY_CALIBRATION, median, type FormantCalibration } from "../audio/formants.ts";
 import { useStore } from "./store.ts";
 import { getModel } from "./useModel.ts";
-import { formantTable as tableFor } from "./formantTable.ts";
+import { ENGLISH_VOWELS, formantTable as tableFor } from "./formantTable.ts";
 import { NEUTRAL, restTip } from "../wasm/engine.ts";
 
 export type MicStatus = "off" | "starting" | "on" | "denied" | "error";
@@ -62,6 +62,9 @@ function load(): MicSettings {
     const v = raw ? JSON.parse(raw) : {};
     // settings saved before v2 kept the old 30 ms default, which smeared vowel-to-vowel motion
     if (!v.v && v.smooth === 30) v.smooth = DEFAULTS.smooth;
+    // calibrations from before captures were checked (v < 3) may have taken "oo"'s F3 for its
+    // F2, which bends every "oo" toward "ee": drop them (the panel asks for a new one)
+    if (!(v.v >= 3)) delete v.calibration;
     return { ...DEFAULTS, ...v };
   } catch {
     return { ...DEFAULTS };
@@ -69,14 +72,14 @@ function load(): MicSettings {
 }
 function save(s: MicSettings): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify({ v: 2, gate: s.gate, smooth: s.smooth, calibration: s.calibration, deviceId: s.deviceId, consonants: s.consonants, hissSense: s.hissSense }));
+    localStorage.setItem(KEY, JSON.stringify({ v: 3, gate: s.gate, smooth: s.smooth, calibration: s.calibration, deviceId: s.deviceId, consonants: s.consonants, hissSense: s.hissSense }));
   } catch {
     // storage blocked: settings last until reload
   }
 }
 
 /** live readings for the meter (not React state: they change every frame) */
-export const micLive = { db: -120, f1: 0, f2: 0, active: false, consonant: "", consonantAt: 0 };
+export const micLive = { db: -120, f1: 0, f2: 0, active: false, consonant: "", consonantAt: 0, aim: "" };
 
 const mic = new MicInput();
 const voiceGate = new VoiceGate();
@@ -261,6 +264,14 @@ function tick(): void {
   if (!v) return;
   const t = applyCalibration(v.f1, v.f2, m.calibration);
   const model = getModel(st.body, ctx.sampleRate);
+  // the English vowel nearest the calibrated target, for the readout (a quick check that "oo" → u)
+  let near = "", nd = Infinity;
+  for (const vw of model.vowels) {
+    if (!ENGLISH_VOWELS.has(vw.ipa)) continue;
+    const d = Math.hypot(Math.log(t.f1 / vw.F1) * 2.2, Math.log(t.f2 / vw.F2));
+    if (d < nd) (nd = d), (near = vw.ipa);
+  }
+  micLive.aim = near;
   const table = formantTable(model);
   // until the table's vowels are measured (the first frame or two), hold still
   if (!table.ready) return;

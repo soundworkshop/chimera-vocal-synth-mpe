@@ -232,7 +232,8 @@ function MicPanel() {
       el.style.setProperty("--gate", String(Math.min(1, Math.max(0, (gateRef.current + 80) / 70))));
       el.classList.toggle("over", micLive.active);
       // what the tracker hears right now (your voice, before calibration)
-      if (readout.current) readout.current.textContent = micLive.active ? `F1 ${Math.round(micLive.f1)} · F2 ${Math.round(micLive.f2)} Hz` : "";
+      // and, after calibration, the vowel Chimera aims for
+      if (readout.current) readout.current.textContent = micLive.active ? `F1 ${Math.round(micLive.f1)} · F2 ${Math.round(micLive.f2)} Hz${micLive.aim ? ` → ${micLive.aim}` : ""}` : "";
     };
     draw();
     return () => cancelAnimationFrame(raf);
