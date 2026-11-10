@@ -2969,3 +2969,11 @@ input[type="range"]::-moz-range-thumb {
     padding: 7px 8px 0;
   }
 }
+
+/* which commit is running (fork: MPE / mic words) */
+.build-id {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  opacity: 0.8;
+}

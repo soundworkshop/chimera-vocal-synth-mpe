@@ -53,6 +53,9 @@ function TopBar() {
       <div className="brand">
         <span className="wordmark">Chimera</span>
         <span className="tagline">A voice grown from a simulated airway</span>
+        <span className="build-id" title={`Built ${new Date(__BUILD_TIME__).toLocaleString()}`}>
+          build {__BUILD_ID__} · {new Date(__BUILD_TIME__).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+        </span>
       </div>
       <Segmented<Mode>
         label="Mode"
