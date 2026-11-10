@@ -67,10 +67,18 @@ impl Engine {
     }
 
     /// An engine whose airway runs at `oversample`× the sample rate (None: the default for it).
+    /// The airway is only stable with its internal rate above 60 kHz (at 48 kHz, 1× runs away
+    /// into noise as soon as the mouth and pitch move), so a request below that is raised.
     pub fn with_oversampling(sample_rate: f64, oversample: Option<usize>) -> Engine {
         crate::init();
         let body = BodyMix::MALE;
-        let oversample = oversample.map(|o| o.clamp(1, 4));
+        let oversample = oversample.map(|o| {
+            let mut o = o.clamp(1, 4);
+            while (o as f64) * sample_rate <= 60000.0 && o < 4 {
+                o += 1;
+            }
+            o
+        });
         Engine { sample_rate, oversample, body, voice: Self::make_voice(sample_rate, body, oversample), gate_level: 0.0, pos: 0, scratch: Vec::with_capacity(MAX_SCHEDULE), beat: BeatPlayer::new(), creature: None }
     }
 

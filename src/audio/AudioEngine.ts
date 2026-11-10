@@ -32,9 +32,9 @@ export class AudioEngine {
    * Polyphony: voices 2…N, each another engine instance, created only while polyphony is on. They
    * mirror the first voice's body, articulation and tone (same mouth, same formants); only their
    * pitch, glide, breath and gate are their own. All feed the same distortion and reverb. A voice
-   * with no note sleeps (renders nothing), so the cost is the notes held. With more than two
-   * voices the extra ones run a lighter airway (1× instead of 2×, about a third of the work): they
-   * all share the browser's one audio thread.
+   * with no note sleeps (renders nothing), so the cost is the notes held: they all share the
+   * browser's one audio thread. (A lighter 1× airway for the extras was tried and ran away into
+   * noise under live playing; the engine now refuses an internal rate under 60 kHz.)
    */
   private extras: { node: AudioWorkletNode; asleep: boolean }[] = [];
   private voiceCount = 1;
@@ -294,7 +294,8 @@ export class AudioEngine {
     const ctx = this.ctx, dist = this.dist;
     if (!ctx || !dist) return;
     const want = this.voiceCount - 1;
-    const os = this.voiceCount > 2 ? 1 : 0;
+    // every voice the full, stable airway (see above)
+    const os = 0;
     // a different airway for the extras: build them again
     if (os !== this.extrasOs) {
       this.removeExtras(0);

@@ -158,7 +158,7 @@ export function VoiceToggles() {
       <span className="poly" role="radiogroup" aria-label="Polyphony: voices for MPE notes">
         <span className="poly-label">Voices</span>
         {POLYPHONY.map((n) => (
-          <Chip key={n} on={poly === n} toggle={false} role="radio" aria-checked={poly === n} onClick={() => setPoly(n)} title={n === 8 ? "Eight voices: the extra seven use a lighter airway, and voices without a note sleep" : `${n} voice${n > 1 ? "s" : ""}`}>
+          <Chip key={n} on={poly === n} toggle={false} role="radio" aria-checked={poly === n} onClick={() => setPoly(n)} title={n === 8 ? "Eight voices: voices without a note sleep, so the CPU goes with the notes held" : `${n} voice${n > 1 ? "s" : ""}`}>
             {n}
           </Chip>
         ))}
