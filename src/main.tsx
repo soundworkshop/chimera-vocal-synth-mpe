@@ -24,8 +24,17 @@ async function boot(): Promise<void> {
     root.append(box);
     return;
   }
-  const { mount } = await import("./ui/mount.tsx");
-  mount(root);
+  let ui: typeof import("./ui/mount.tsx");
+  try {
+    ui = await import("./ui/mount.tsx");
+  } catch (err) {
+    // A browser can hold on to a "not found" for the UI's file (asked for mid-deploy, then
+    // cached): ask again at an address it hasn't cached. The URL is in the browser's message.
+    const url = /https?:\/\/\S+\.js/.exec(String(err))?.[0];
+    if (!url) throw err;
+    ui = (await import(/* @vite-ignore */ `${url}?retry=${Date.now()}`)) as typeof import("./ui/mount.tsx");
+  }
+  ui.mount(root);
 }
 
 void boot();
