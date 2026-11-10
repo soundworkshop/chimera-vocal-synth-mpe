@@ -4,8 +4,10 @@
  * 150 ms as the capture settled, decode errors in nearly every frame, so the GUI came out as
  * fragments on black). Here nothing about the picture can change mid-stream:
  *
- * - picture: the newest frame of the shared tab is drawn, letterboxed, onto a fixed 1280×720
- *   canvas 30 times a second, and that canvas is what's encoded (H.264, a keyframe every 2 s)
+ * - picture: the newest frame of the shared tab is drawn onto a fixed canvas in the tab's own
+ *   shape (up to 1080 tall, high-quality downscale from Retina; letterboxed if the tab's shape
+ *   changes) 30 times a second, and that canvas is what's encoded (H.264, a keyframe every 2 s,
+ *   ~0.13 bits per pixel: thin lines and small text on a dark UI need it)
  * - sound: the audio track's samples, re-stamped on the same clock as the picture, encoded as AAC
  *   (Opus where the browser has no AAC encoder; X wants AAC, which Chrome on Mac and Windows has)
  * - container: mp4-muxer, moov at the front (plays and uploads without a second pass)
@@ -14,9 +16,24 @@
  */
 import { ArrayBufferTarget, Muxer } from "mp4-muxer";
 
-export const W = 1280;
-export const H = 720;
+/** the tallest the video is (the tab's own shape, so no bars); X takes up to 1920 wide */
+export const MAX_H = 1080;
+const MAX_W = 1920;
 const FPS = 30;
+/** bits per pixel per frame: enough for thin lines and small text on a dark UI */
+const BPP = 0.13;
+
+/** The video size for a source of this shape: its aspect, at most 1080 tall and 1920 wide, even. */
+export function outputSize(srcW: number, srcH: number): { w: number; h: number } {
+  const aspect = srcW > 0 && srcH > 0 ? srcW / srcH : 16 / 9;
+  let h = Math.min(MAX_H, srcH || MAX_H);
+  let w = h * aspect;
+  if (w > MAX_W) (w = MAX_W), (h = w / aspect);
+  const even = (x: number) => Math.max(2, 2 * Math.round(x / 2));
+  return { w: even(w), h: even(h) };
+}
+
+const bitrate = (w: number, h: number) => Math.round(w * h * FPS * BPP);
 const KEY_EVERY = FPS * 2;
 
 type Processor = new (init: { track: MediaStreamTrack }) => { readable: ReadableStream<VideoFrame | AudioData> };
@@ -25,11 +42,11 @@ const TrackProcessor = (globalThis as unknown as { MediaStreamTrackProcessor?: P
 const VIDEO_CODECS = ["avc1.4D0028", "avc1.42E028", "avc1.42002A"];
 
 /** Whether WebCodecs can record here, and with what: null if not. */
-export async function supported(sampleRate: number): Promise<{ video: string; audio: "aac" | "opus" } | null> {
+export async function supported(sampleRate: number, W = 1920, H = 1080): Promise<{ video: string; audio: "aac" | "opus" } | null> {
   if (!TrackProcessor || typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") return null;
   let video = "";
   for (const codec of VIDEO_CODECS) {
-    const r = await VideoEncoder.isConfigSupported({ codec, width: W, height: H, bitrate: 2_500_000, framerate: FPS, avc: { format: "avc" } }).catch(() => null);
+    const r = await VideoEncoder.isConfigSupported({ codec, width: W, height: H, bitrate: bitrate(W, H), framerate: FPS, avc: { format: "avc" } }).catch(() => null);
     if (r?.supported) {
       video = codec;
       break;
@@ -51,7 +68,8 @@ export interface Mp4Recording {
  * Record `video` (any size, may change) and `audio` until stop(). `background` fills the
  * letterbox bars.
  */
-export function recordMp4(video: MediaStreamTrack, audio: MediaStreamTrack, sampleRate: number, codecs: { video: string; audio: "aac" | "opus" }, background = "#000"): Mp4Recording {
+export function recordMp4(video: MediaStreamTrack, audio: MediaStreamTrack, sampleRate: number, codecs: { video: string; audio: "aac" | "opus" }, size: { w: number; h: number }, background = "#000"): Mp4Recording {
+  const W = size.w, H = size.h;
   const target = new ArrayBufferTarget();
   const muxer = new Muxer({
     target,
@@ -62,13 +80,16 @@ export function recordMp4(video: MediaStreamTrack, audio: MediaStreamTrack, samp
   });
   let failed: unknown = null;
   const venc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => (failed ??= e) });
-  venc.configure({ codec: codecs.video, width: W, height: H, bitrate: 2_500_000, framerate: FPS, avc: { format: "avc" }, latencyMode: "quality" });
+  venc.configure({ codec: codecs.video, width: W, height: H, bitrate: bitrate(W, H), framerate: FPS, avc: { format: "avc" }, latencyMode: "quality" });
   const aenc = new AudioEncoder({ output: (c, m) => muxer.addAudioChunk(c, m), error: (e) => (failed ??= e) });
   aenc.configure({ codec: codecs.audio === "aac" ? "mp4a.40.2" : "opus", sampleRate, numberOfChannels: 2, bitrate: 128_000 });
 
   const t0 = performance.now();
   const canvas = new OffscreenCanvas(W, H);
   const g = canvas.getContext("2d", { alpha: false })!;
+  // the tab arrives at Retina size: a high-quality downscale keeps 1-px lines and small text
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = "high";
   g.fillStyle = background;
   g.fillRect(0, 0, W, H);
 

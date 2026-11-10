@@ -1,13 +1,13 @@
 /**
  * Record a short video for posting: the Chimera tab's picture (the browser asks which tab or
  * window, offering this one first) with Chimera's own sound tapped from the engine's output, so
- * the performer's voice into the mic isn't in it. Light by design: 720p at most, 30 fps, about
- * 2.5 Mb/s video and 128 kb/s audio, MP4 (H.264/AAC), built by hand with WebCodecs where the
+ * the performer's voice into the mic isn't in it. The tab's own shape up to 1080 tall, 30 fps,
+ * ~6 Mb/s video (small text survives) and 128 kb/s audio, MP4 (H.264/AAC), built by hand with WebCodecs where the
  * browser can (mp4Recorder.ts; Chrome's own MP4 recording came out corrupted), and
  * at most 2 min 20 s (X's limit for most accounts). The file downloads when recording stops.
  */
 import { engine } from "./AudioEngine.ts";
-import { recordMp4, supported } from "./mp4Recorder.ts";
+import { outputSize, recordMp4, supported } from "./mp4Recorder.ts";
 
 export const MAX_SECONDS = 140;
 
@@ -34,8 +34,9 @@ export async function startRecording(onDone: (result: { file?: string; error?: s
   let screen: MediaStream;
   try {
     screen = await navigator.mediaDevices.getDisplayMedia({
-      // scaled down to 720p (a Retina tab is captured at twice its size otherwise)
-      video: { width: { ideal: 1280, max: 1280 }, height: { ideal: 720, max: 720 }, frameRate: { ideal: 30, max: 30 }, resizeMode: "crop-and-scale" } as MediaTrackConstraints,
+      // the tab at its full (Retina) size: the recorder scales it down itself, in high quality
+      // (the browser's own scaling to 720p blurred away thin lines and small text)
+      video: { frameRate: { ideal: 30, max: 30 } },
       audio: false,
       // offer this tab first, and don't make the person hunt for it
       preferCurrentTab: true,
@@ -76,12 +77,14 @@ export async function startRecording(onDone: (result: { file?: string; error?: s
   // by hand where the browser can (a fixed 1280×720 picture, nothing changes mid-stream);
   // MediaRecorder otherwise
   const ctxRate = engine.ctx?.sampleRate ?? 48000;
-  const codecs = await supported(ctxRate);
+  const vs = video?.getSettings();
+  const size = outputSize(vs?.width ?? window.innerWidth * devicePixelRatio, vs?.height ?? window.innerHeight * devicePixelRatio);
+  const codecs = await supported(ctxRate, size.w, size.h);
   const audioTrack = tap.stream.getAudioTracks()[0];
   let stopNow: () => void;
   if (codecs && video && audioTrack) {
     const bg = getComputedStyle(document.body).backgroundColor || "#000";
-    const rec = recordMp4(video, audioTrack, ctxRate, codecs, bg);
+    const rec = recordMp4(video, audioTrack, ctxRate, codecs, size, bg);
     stopNow = () =>
       void rec.stop().then(
         (blob) => finish(blob, "mp4"),
