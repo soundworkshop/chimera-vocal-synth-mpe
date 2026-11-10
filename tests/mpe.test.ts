@@ -278,21 +278,31 @@ test("consonants: s, ʃ, f held as hiss, t and k bursts; no trigger on vowels, p
   expect(got).toEqual(["hissStart:s", "end", "hissStart:ʃ", "end", "hissStart:f", "end", "stop:t", "stop:k"]);
 });
 
-test("consonant gestures: a hiss owns its constriction until released, a stop closes and lets go", async () => {
-  const { hissGestures, stopGestures } = await import("../src/ui/consonantGestures.ts");
+test("consonant gestures: a hiss's pull follows its strength; a stop closes and lets go", async () => {
+  const { hissSlice, stopGestures } = await import("../src/ui/consonantGestures.ts");
   const male = { female: 0, child: 0 };
-  const s = hissGestures("s", male, 1_000_001);
-  expect(s.every((g) => g.tag === 1_000_001)).toBe(true);
-  const main = s.find((g) => g.label === "s" && g.strength === 40)!;
-  expect(main.targets.ttY).toBeCloseTo(9.111, 3); // the body's calibrated constriction
-  expect(s.some((g) => g.targets.abduction! > 0)).toBe(true); // voiceless
-  const f = hissGestures("f", { female: 1, child: 0 }, 1_000_002).find((g) => g.strength === 40)!;
+  // the tongue's share of the way to the constriction: w / (0.05 + w), the posture weighing 0.05
+  const share = (amount: number) => {
+    const c = hissSlice("s", male, amount).find((g) => g.label === "s" && g.targets.ttY !== undefined)!;
+    return c.strength / (0.05 + c.strength);
+  };
+  expect(share(0.05)).toBeGreaterThan(0.55);
+  expect(share(0.05)).toBeLessThan(0.7);
+  expect(share(0.5)).toBeGreaterThan(share(0.05));
+  expect(share(1)).toBeGreaterThan(0.995);
+  const full = hissSlice("s", male, 1);
+  expect(full.find((g) => g.label === "s" && g.targets.ttY !== undefined)!.targets.ttY).toBeCloseTo(9.111, 3); // calibrated
+  const ab = (amount: number) => hissSlice("s", male, amount).find((g) => g.targets.abduction !== undefined)!.strength;
+  expect(ab(0.25)).toBeCloseTo(0.5, 5);
+  expect(ab(1)).toBeCloseTo(2, 5);
+  // slices are short and overlap the next frame's
+  expect(full.every((g) => g.t1 <= 0.04 && g.rampIn > 0 && g.tag === undefined)).toBe(true);
+  const f = hissSlice("f", { female: 1, child: 0 }, 1).find((g) => g.targets.lipAp !== undefined)!;
   expect(f.targets.lipAp).toBeCloseTo(0.013, 3);
   const t = stopGestures("t", male);
   const close = t.find((g) => g.strength === 40)!;
   expect(close.targets.ttY).toBeCloseTo(9.68, 2);
   expect(close.t1).toBeLessThan(0.06);
-  expect(t.every((g) => g.tag === undefined)).toBe(true);
   const k = stopGestures("k", male).find((g) => g.strength === 40)!;
   expect(k.targets.tbY).toBeCloseTo(8.35, 2);
 });
@@ -389,4 +399,31 @@ test("formant follower: an 'oo' whose F2 fades doesn't jump to F3 (real earbud s
   // F2 back
   v = f.update(fr(328, 858, 2415), true, 1, dt, 0.015)!;
   expect(v.f2).toBeLessThan(1000);
+});
+
+test("consonants: the hiss amount rises and falls with the hiss, not on/off", async () => {
+  const { ConsonantDetector } = await import("../src/audio/consonants.ts");
+  const sr = 48000;
+  let seed = 9;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
+  // high-band noise whose level ramps up over 300 ms then down
+  const n = Math.round(sr * 0.9), sig = new Float32Array(n);
+  for (let i = 0, y1 = 0, y2 = 0; i < n; i++) {
+    const r = Math.exp((-Math.PI * 4000) / sr), c = 2 * r * Math.cos((2 * Math.PI * 6000) / sr);
+    const y = rnd() + c * y1 - r * r * y2;
+    (y2 = y1), (y1 = y);
+    const t = i / sr, env = t < 0.1 ? 0 : t < 0.4 ? (t - 0.1) / 0.3 : t < 0.7 ? 1 - (t - 0.4) / 0.3 : 0;
+    sig[i] = y * 0.004 * Math.pow(env, 1.5) + rnd() * 0.0002;
+  }
+  const det = new ConsonantDetector();
+  const amounts: number[] = [];
+  for (let end = 2048; end <= n; end += 800) {
+    det.update(sig.subarray(end - 2048, end), sr, 800 / sr, -60);
+    amounts.push(det.hissNow?.amount ?? 0);
+  }
+  const peak = Math.max(...amounts);
+  expect(peak).toBeGreaterThan(0.6);
+  // several distinct in-between values on the way up: a gradient, not a step
+  const mids = amounts.filter((a) => a > 0.1 && a < peak * 0.85);
+  expect(mids.length).toBeGreaterThanOrEqual(4);
 });

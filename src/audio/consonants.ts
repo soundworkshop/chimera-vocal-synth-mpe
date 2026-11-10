@@ -108,6 +108,8 @@ export class ConsonantDetector {
   private quietFrames = 0;
   private pending: HissClass | null = null;
   private pendingFrames = 0;
+  /** how strongly the hiss sounds, 0..1, smoothed (quick to rise, a little slower to fall) */
+  private amount = 0;
   /** after a burst, its aspiration is not a new hiss, nor a second burst */
   private sinceStop = 1;
 
@@ -139,6 +141,14 @@ export class ConsonantDetector {
     const ratio = (f.mid + f.high) / (f.low + 1e-20);
     const hissy = loudEnough && ratio > this.hissRatio && f.periodicity < 0.7 && this.sinceStop > 0.06;
     const cls: HissClass = f.db < this.peak - 22 ? "f" : f.centroid > 4600 ? "s" : "ʃ";
+    // how much: how far the hiss ratio is past the threshold (±5 dB around it), how far the
+    // level is above the room, and how noise-like it is (voicing pulls it down)
+    const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+    const q = clamp01((10 * Math.log10(ratio) - (10 * Math.log10(this.hissRatio) - 5)) / 10);
+    const lvl = clamp01((f.db - (this.floor + 6)) / 15);
+    const noise = clamp01((0.85 - f.periodicity) / 0.25);
+    const raw = this.sinceStop > 0.06 ? q * lvl * noise : 0;
+    this.amount += (raw - this.amount) * (1 - Math.exp(-dt / (raw > this.amount ? 0.012 : 0.035)));
     if (hissy) {
       this.hissFrames++;
       this.quietFrames = 0;
@@ -208,6 +218,11 @@ export class ConsonantDetector {
     return this.hiss !== null;
   }
 
+  /** the hiss sounding now (null: none) and how strongly, 0..1 */
+  get hissNow(): { ipa: HissClass; amount: number } | null {
+    return this.hiss ? { ipa: this.hiss, amount: this.amount } : null;
+  }
+
   get recentStop(): boolean {
     return this.sinceStop < 0.06;
   }
@@ -219,6 +234,7 @@ export class ConsonantDetector {
     this.hissFrames = 0;
     this.quietFrames = 0;
     this.pending = null;
+    this.amount = 0;
     this.sinceStop = 1;
   }
 }

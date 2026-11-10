@@ -2,8 +2,8 @@
  * Chimera's own articulation for the consonants the mic hears, as live gestures layered over the
  * vowel the mic is holding. Targets, strengths, ramps and speeds follow the speech planner
  * (crates/chimera/src/phonetics/inventory.rs and planner.rs oral_gestures_into), with the
- * fricatives' calibrated constriction for the current body; a hiss is open-ended (released by
- * its tag when the hiss ends), a stop is a quick closure and release with a puff of aspiration.
+ * fricatives' calibrated constriction for the current body; a hiss follows the performer's
+ * strength frame by frame, a stop is a quick closure and release with a puff of aspiration.
  */
 import calibrated from "../../crates/chimera/src/phonetics/consonantTargets.generated.json";
 import type { BodyMix, ControlKey, Gesture } from "../wasm/types.ts";
@@ -33,8 +33,6 @@ const DEFS: Record<HissClass | StopClass, Def> = {
 
 /** the velar's front-back place follows the vowel: its own tbX only weakly */
 const VELAR_TBX = 2.3;
-/** long enough to outlast any hiss; the hiss's end releases it by tag */
-const OPEN_END = 30;
 
 /** The calibrated constriction for this body (blended like the vowels). */
 function forBody(ipa: HissClass | StopClass, body: BodyMix): Targets {
@@ -55,14 +53,28 @@ function forBody(ipa: HissClass | StopClass, body: BodyMix): Targets {
 
 const g = (t0: number, t1: number, rampIn: number, rampOut: number, strength: number, targets: Targets, extra: Partial<Gesture> = {}): Gesture => ({ t0, t1, rampIn, rampOut, strength, targets, ...extra });
 
-/** A held hiss: the constriction and an open glottis (voiceless), until released by `tag`. */
-export function hissGestures(ipa: HissClass, body: BodyMix, tag: number): Gesture[] {
+/**
+ * One frame's worth of a hiss whose strength follows the performer's (0..1), sent every frame:
+ * short gestures that overlap their neighbours (ramps one frame long), so the constriction and
+ * the open glottis glide with the hiss instead of switching on and off.
+ *
+ * The engine blends a key's target with the performer's posture by weight, the posture weighing
+ * 0.05 (planner: a strength-40 consonant owns its articulators). A weight w moves the tongue
+ * w / (0.05 + w) of the way, so the strength is chosen for the share wanted: from a little past
+ * halfway at the faintest hiss (a wide gap, barely noisy) to all the way at full. The glottis
+ * opens in proportion (its weight acts linearly up to 2).
+ */
+export function hissSlice(ipa: HissClass, body: BodyMix, amount: number, frame = 1 / 60): Gesture[] {
+  const a = Math.min(1, Math.max(0, amount));
+  const share = 0.55 + 0.45 * Math.pow(a, 0.7);
+  const strength = share >= 0.998 ? 40 : Math.min(40, (0.05 * share) / (1 - share));
   const d = DEFS[ipa];
+  const t1 = frame * 2;
   const out = [
-    g(0, OPEN_END, 0.03, 0.018, 40, forBody(ipa, body), { speed: 1.3, releaseHold: 0.045, label: ipa, tag }),
-    g(0, OPEN_END, 0.03, 0.03, 6, { abduction: 0.3 }, { label: "voiceless", tag }),
+    g(0, t1, frame, frame, strength, forBody(ipa, body), { speed: 1.3, label: ipa }),
+    g(0, t1, frame, frame, 2 * a, { abduction: 0.3 }, { label: "voiceless" }),
   ];
-  if (d.alveolar) out.push(g(0, OPEN_END, 0.05, 0.05, 1.2, { tbX: 3.2, tbY: 7.4 }, { label: ipa, tag }));
+  if (d.alveolar) out.push(g(0, t1, frame, frame, 1.2 * a, { tbX: 3.2, tbY: 7.4 }, { label: ipa }));
   return out;
 }
 

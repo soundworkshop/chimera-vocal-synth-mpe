@@ -13,7 +13,7 @@ import { engine } from "../audio/AudioEngine.ts";
 import { MicInput, listInputs } from "../audio/micInput.ts";
 import { VoiceGate } from "../audio/voiceGate.ts";
 import { ConsonantDetector } from "../audio/consonants.ts";
-import { hissGestures, stopGestures } from "./consonantGestures.ts";
+import { hissSlice, stopGestures } from "./consonantGestures.ts";
 import { analyzeFormants, applyCalibration, calibrationProblem, fitCalibration, FormantFollower, IDENTITY_CALIBRATION, median, type FormantCalibration } from "../audio/formants.ts";
 import { useStore } from "./store.ts";
 import { getModel } from "./useModel.ts";
@@ -81,15 +81,6 @@ export const micLive = { db: -120, f1: 0, f2: 0, active: false, consonant: "", c
 const mic = new MicInput();
 const voiceGate = new VoiceGate();
 const consonants = new ConsonantDetector();
-/** the held hiss's gesture tag (released when the hiss ends); tags well clear of Sing's */
-let hissTag = 0;
-let nextTag = 1_000_000;
-
-function endHiss(): void {
-  if (hissTag) engine.release(hissTag);
-  hissTag = 0;
-}
-
 /** hiss sensitivity → the detector's (mid + high) / low power ratio (0.6 → 2.5) */
 const hissRatio = (sense: number) => 8 * Math.pow(0.15, Math.min(1, Math.max(0, sense)));
 /** bumped by every on/off, so a slow permission answer for an older attempt is ignored */
@@ -220,7 +211,6 @@ export const useMic = create<MicState>((set, get) => ({
 }));
 
 function stop(): void {
-  endHiss();
   cancelAnimationFrame(raf);
   raf = 0;
   mic.close();
@@ -252,19 +242,17 @@ function tick(): void {
   if (cal) return calibrateStep(voiced, r.f1, r.f2);
 
   const st = useStore.getState();
-  if (st.mode !== "play") return endHiss();
+  if (st.mode !== "play") return;
   if (m.consonants) {
     consonants.hissRatio = hissRatio(m.hissSense);
     for (const e of consonants.update(frame, ctx.sampleRate, dt, m.gate)) {
-      if (e.type === "hissEnd") endHiss();
-      else if (e.type === "hissStart" || e.type === "hissChange") {
-        endHiss();
-        hissTag = nextTag++;
-        engine.scheduleGestures(hissGestures(e.ipa, st.body, hissTag));
-      } else engine.scheduleGestures(stopGestures(e.ipa, st.body));
+      if (e.type === "stop") engine.scheduleGestures(stopGestures(e.ipa, st.body));
       if (e.type !== "hissEnd") (micLive.consonant = e.ipa), (micLive.consonantAt = now);
     }
-  } else endHiss();
+    // a hiss follows how hard it is hissed, frame by frame (overlapping short gestures)
+    const h = consonants.hissNow;
+    if (h && h.amount > 0.02) engine.scheduleGestures(hissSlice(h.ipa, st.body, h.amount, Math.max(1 / 120, Math.min(1 / 30, dt))));
+  }
   // a hiss's or a burst's formants are noise: the vowel holds meanwhile
   const consonant = m.consonants && (consonants.hissing || consonants.recentStop);
   // confidence: full near the current speaking level, little at the edges of words
