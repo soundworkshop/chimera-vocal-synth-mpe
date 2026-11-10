@@ -341,7 +341,7 @@ test("formant table: the measured inverse lands on target where a straight blend
   ].map((v) => ({ ipa: v.ipa, example: "", F1: F(v)[0], F2: F(v)[1], artic: { jaw: v.jaw, tbX: v.tbX } }));
   const model = { vowels, transfer: (a: { jaw: number; tbX: number }) => ({ freqs: [], db: [], formants: F(a) }) };
   const neutral = { jaw: 0.8, tbX: 2.8 } as never;
-  const t = new FormantTable(model as never, { neutral, restTip: () => ({ x: 6, y: 8 }) }, 600);
+  const t = new FormantTable(model as never, { neutral, restTip: () => ({ x: 6, y: 8 }) }, 600, new Set(["i", "u", "ɑ", "æ"]));
   while (!t.complete) t.grow(50);
   // halfway (in log Hz) between "ɑ" and "i"
   const mid = [Math.sqrt(vowels[2].F1 * vowels[0].F1), Math.sqrt(vowels[2].F2 * vowels[0].F2)];
@@ -361,4 +361,32 @@ test("calibration: refuses a capture where 'oo' was tracked like 'ee' (F3 taken 
   expect(calibrationProblem([ee, ah, { f1: 340, f2: 880 }])).toBe(null);
   expect(calibrationProblem([ee, ah, { f1: 340, f2: 2150 }])).toMatch(/oo/);
   expect(calibrationProblem([ee, { f1: 360, f2: 1300 }, { f1: 340, f2: 880 }])).toMatch(/ah/);
+});
+
+test("formant table: built from English vowels only (an 'oo' can't borrow spread lips from ɯ or ɨ)", async () => {
+  const { FormantTable } = await import("../src/ui/formantTable.ts");
+  const mk = (ipa: string, F1: number, F2: number, lipWidth: number) => ({ ipa, example: "", F1, F2, artic: { lipWidth } });
+  // u is rounded (lipWidth 0); ɯ, nearly the same F1/F2, is spread (1)
+  const vowels = [mk("i", 337, 2225, 1), mk("ɑ", 731, 1337, 0.5), mk("u", 378, 997, 0), mk("ɯ", 341, 1350, 1), mk("ɨ", 331, 1600, 1)];
+  const byLips = (a: { lipWidth: number }) => vowels.find((v) => v.artic.lipWidth === a.lipWidth)!;
+  const model = { vowels, transfer: (a: { lipWidth: number }) => ({ freqs: [], db: [], formants: [byLips(a).F1, byLips(a).F2] }) };
+  const t = new FormantTable(model as never, { neutral: { lipWidth: 0.5 } as never, restTip: () => ({ x: 6, y: 8 }) }, 3);
+  while (!t.ready) t.grow(50);
+  // the performer's calibrated "oo" (from a real earbud sample): rounded lips
+  expect((t.lookup(339, 1076) as { lipWidth: number }).lipWidth).toBeLessThan(0.3);
+});
+
+test("formant follower: an 'oo' whose F2 fades doesn't jump to F3 (real earbud sample)", async () => {
+  const { FormantFollower } = await import("../src/audio/formants.ts");
+  const fr = (...fs: number[]) => ({ f1: 0, f2: 0, db: -45, candidates: fs.map((f) => ({ f, bw: 150 })) });
+  const f = new FormantFollower();
+  const dt = 1 / 60;
+  for (let i = 0; i < 20; i++) f.update(fr(330, 860, 2510), true, 1, dt, 0.015);
+  // 200 ms with F2 gone: only F1 and F3 (as at 2.17–2.37 s in the sample)
+  let v = { f1: 0, f2: 0 };
+  for (let i = 0; i < 12; i++) v = f.update(fr(336, 2556), true, 1, dt, 0.015)!;
+  expect(v.f2).toBeLessThan(1000);
+  // F2 back
+  v = f.update(fr(328, 858, 2415), true, 1, dt, 0.015)!;
+  expect(v.f2).toBeLessThan(1000);
 });

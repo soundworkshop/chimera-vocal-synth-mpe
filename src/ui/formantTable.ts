@@ -7,7 +7,7 @@
  * airway's transfer function, and the inverse is a weighted nearest-neighbour look-up in that
  * measured space (natively: mean error 7.3% → 1.5%, worst 19% → 6% along common vowel paths).
  *
- * Built incrementally (a few ms per frame) per body; until it is big enough the blend is used.
+ * Built incrementally (a few ms per frame) per body, from English vowels only (ENGLISH_VOWELS).
  */
 import type { HumanArtic } from "../wasm/types.ts";
 import type { VoiceModel } from "./analysis.ts";
@@ -28,6 +28,13 @@ interface Entry {
   l2: number;
 }
 
+/**
+ * The vowels English uses. Chimera's set also has y, ø, œ, ɨ, ɯ, ɤ, which share F1/F2 with
+ * English vowels but not their lips: F1/F2 can't tell rounded from spread, so a performer's "oo"
+ * landed nearer ɯ (an unrounded "oo") and ɨ than u, and came out with spread lips: "ee".
+ */
+export const ENGLISH_VOWELS = new Set(["i", "ɪ", "e", "ɛ", "æ", "a", "ɑ", "ɒ", "ɔ", "o", "ʊ", "u", "ʌ", "ə", "ɐ", "ɝ"]);
+
 /** F1 differences count more (as in the blend): perceptually larger */
 const F1_WEIGHT = 2.2;
 
@@ -37,14 +44,20 @@ export class FormantTable {
   private seed = 12345;
   private vowelsDone = false;
 
+  private readonly vowels: VoiceModel["vowels"];
+
   constructor(
     private readonly model: Pick<VoiceModel, "vowels" | "transfer">,
     private readonly deps: TableDeps,
     readonly size = 1200,
-  ) {}
+    allowed: Set<string> = ENGLISH_VOWELS,
+  ) {
+    this.vowels = model.vowels.filter((v) => allowed.has(v.ipa));
+  }
 
+  /** usable once the vowels themselves are measured (it is then a blend of them; mixes refine it) */
   get ready(): boolean {
-    return this.entries.length >= 300;
+    return this.entries.length >= this.vowels.length;
   }
 
   get complete(): boolean {
@@ -57,7 +70,7 @@ export class FormantTable {
     const t0 = performance.now();
     if (!this.vowelsDone) {
       // the calibrated vowels themselves first (measured, like everything else)
-      for (const v of this.model.vowels) this.queue.push(this.vec(v.artic));
+      for (const v of this.vowels) this.queue.push(this.vec(v.artic));
       this.vowelsDone = true;
     }
     let tries = 0;
@@ -98,7 +111,7 @@ export class FormantTable {
 
   /** a random mix of two or three calibrated vowels */
   private mix(): Float64Array {
-    const vs = this.model.vowels;
+    const vs = this.vowels;
     const n = this.rnd() < 0.6 ? 2 : 3;
     const out = new Float64Array(KEYS.length);
     const picks = Array.from({ length: n }, () => ({ v: this.vec(vs[Math.floor(this.rnd() * vs.length) % vs.length].artic), w: this.rnd() + 0.05 }));

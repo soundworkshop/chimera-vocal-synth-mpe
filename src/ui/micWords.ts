@@ -274,7 +274,9 @@ function tick(): void {
   const t = applyCalibration(v.f1, v.f2, m.calibration);
   const model = getModel(st.body, ctx.sampleRate);
   const table = formantTable(model);
-  st.setArtic(table.ready ? table.lookup(t.f1, t.f2) : model.articForFormants(t.f1, t.f2), true);
+  // until the table's vowels are measured (the first frame or two), hold still
+  if (!table.ready) return;
+  st.setArtic(table.lookup(t.f1, t.f2), true);
 }
 
 function calibrateStep(voiced: boolean, f1: number, f2: number): void {

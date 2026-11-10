@@ -145,13 +145,19 @@ const F1_RANGE = [180, 1100], F2_RANGE = [550, 3200];
  * little further away): a formant moves continuously, so a stray root that appears between F1
  * and F2 for a frame doesn't get taken for F2.
  */
-export function pickFormants(c: Resonance[], prev1: number, prev2: number): { f1: number; f2: number } {
+export function pickFormants(c: Resonance[], prev1: number, prev2: number, prev3 = 0): { f1: number; f2: number; f3: number } {
   const cost = (r: Resonance, prev: number) => Math.abs(Math.log(r.f / prev)) + r.bw / 800;
   const best = (list: Resonance[], prev: number) => (prev > 0 ? list.reduce<Resonance | null>((b, r) => (!b || cost(r, prev) < cost(b, prev) ? r : b), null) : (list[0] ?? null));
   const r1 = best(c.filter((r) => r.f >= F1_RANGE[0] && r.f <= F1_RANGE[1]), prev1);
-  if (!r1) return { f1: 0, f2: 0 };
-  const r2 = best(c.filter((r) => r.f > r1.f * 1.15 && r.f >= F2_RANGE[0] && r.f <= F2_RANGE[1]), prev2);
-  return { f1: r1.f, f2: r2?.f ?? 0 };
+  if (!r1) return { f1: 0, f2: 0, f3: 0 };
+  let r2 = best(c.filter((r) => r.f > r1.f * 1.15 && r.f >= F2_RANGE[0] && r.f <= F2_RANGE[1]), prev2);
+  // F2 fading out of a back vowel ("oo"'s F2 is weak): the only candidate left can be F3, right
+  // where F3 just was and far from F2. Take it for what it is and report F2 missing (the
+  // follower holds it) rather than leaping to an "ee".
+  if (r2 && prev2 > 0 && prev3 > 0 && Math.abs(Math.log(r2.f / prev3)) < 0.12 && Math.abs(Math.log(r2.f / prev2)) > 0.35) return { f1: r1.f, f2: 0, f3: r2.f };
+  const f2 = r2?.f ?? 0;
+  const r3 = f2 ? best(c.filter((r) => r.f > f2 * 1.12 && r.f < 4000), prev3) : null;
+  return { f1: r1.f, f2, f3: r3?.f ?? 0 };
 }
 
 /**
@@ -165,6 +171,9 @@ export class FormantFollower {
   private hist: { f1: number; f2: number }[] = [];
   private prev1 = 0;
   private prev2 = 0;
+  private prev3 = 0;
+  /** time F2 has been missing (s): past a short while, stop holding it */
+  private f2Missing = 0;
   /** smoothed log F1, log F2 (0: none yet) */
   private s1 = 0;
   private s2 = 0;
@@ -181,12 +190,19 @@ export class FormantFollower {
   update(frame: FormantFrame, voiced: boolean, confidence: number, dt: number, tau: number): { f1: number; f2: number } | null {
     if (!voiced) {
       this.silent += dt;
-      if (this.silent > FormantFollower.PAUSE) (this.hist = []), (this.prev1 = this.prev2 = 0), (this.waiting = true);
+      if (this.silent > FormantFollower.PAUSE) (this.hist = []), (this.prev1 = this.prev2 = this.prev3 = 0), (this.waiting = true);
       return null;
     }
     this.silent = 0;
-    const pick = pickFormants(frame.candidates, this.prev1, this.prev2);
-    if (!pick.f1 || !pick.f2) return null;
+    const raw = pickFormants(frame.candidates, this.prev1, this.prev2, this.prev3);
+    if (!raw.f1) return null;
+    if (raw.f3) this.prev3 = raw.f3;
+    // F2 missing for a moment: hold the last one (F1 still moves); missing for long: start over
+    if (!raw.f2) {
+      this.f2Missing += dt;
+      if (this.f2Missing > 0.3 || !this.prev2) return (this.prev2 = this.prev3 = 0), null;
+    } else this.f2Missing = 0;
+    const pick = { f1: raw.f1, f2: raw.f2 || this.prev2 };
     this.prev1 = pick.f1;
     this.prev2 = pick.f2;
     this.hist.push(pick);
@@ -221,7 +237,8 @@ export class FormantFollower {
 
   reset(): void {
     this.hist = [];
-    this.prev1 = this.prev2 = 0;
+    this.prev1 = this.prev2 = this.prev3 = 0;
+    this.f2Missing = 0;
     this.s1 = this.s2 = 0;
     this.silent = Infinity;
     this.waiting = true;
