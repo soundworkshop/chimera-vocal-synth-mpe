@@ -25,6 +25,8 @@ export class AudioEngine {
   private master: GainNode | null = null;
   /** plate reverb after the master (the analysers read the dry voice) */
   private reverb: AudioWorkletNode | null = null;
+  /** the last node before the speakers (what a recording should hear) */
+  private out: AudioNode | null = null;
   private reverbSettings: ReverbSettings = { ...DEFAULT_REVERB };
   /**
    * Second voice (two-voice MPE): another engine instance, created only while two voices are on.
@@ -149,6 +151,7 @@ export class AudioEngine {
       console.error("reverb:", e);
       this.reverb = null;
     }
+    this.out = this.reverb ?? master;
     if (this.reverb) master.connect(this.reverb).connect(ctx.destination);
     else master.connect(ctx.destination);
     master.connect(analyser);
@@ -318,6 +321,27 @@ export class AudioEngine {
     this.pendingArtic = { ...(this.pendingArtic ?? {}), ...values };
     if (tipFree !== undefined) this.pendingTipFree = tipFree;
     this.scheduleFlush();
+  }
+
+  /**
+   * What the speakers hear, for recording: a tap on the engine's output (after distortion and
+   * reverb), not a microphone, so the room and the performer's own voice stay out. Null before
+   * audio starts. Release it with releaseTap.
+   */
+  recordTap(): MediaStreamAudioDestinationNode | null {
+    if (!this.ctx || !this.out) return null;
+    const dest = this.ctx.createMediaStreamDestination();
+    this.out.connect(dest);
+    return dest;
+  }
+
+  releaseTap(dest: MediaStreamAudioDestinationNode): void {
+    try {
+      this.out?.disconnect(dest);
+    } catch {
+      // already gone (audio restarted)
+    }
+    dest.stream.getTracks().forEach((t) => t.stop());
   }
 
   /** Distortion knobs (each 0..1); kept for when audio starts. */

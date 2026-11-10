@@ -2977,3 +2977,49 @@ input[type="range"]::-moz-range-thumb {
   color: var(--text-dim);
   opacity: 0.8;
 }
+
+/* the record button (top bar) */
+.record {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.record-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--blue-mid);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.record-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--red);
+}
+
+.record-btn.on {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.record-btn.on .record-dot {
+  animation: record-blink 1s steps(2, start) infinite;
+}
+
+@keyframes record-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+.record-note {
+  font-size: 11px;
+  color: var(--text-dim);
+}

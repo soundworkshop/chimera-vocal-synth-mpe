@@ -7,6 +7,7 @@ import { Stroboscope } from "./components/Stroboscope.tsx";
 import { SpectrumView } from "./components/SpectrumView.tsx";
 import { VowelMap } from "./components/VowelMap.tsx";
 import { VoiceControls, VoiceToggles } from "./components/VoiceControls.tsx";
+import { MAX_SECONDS, startRecording, type Recording } from "../audio/recorder.ts";
 import { Keys } from "./components/Keys.tsx";
 import { Segmented, Toggle } from "./components/Controls.tsx";
 import { Screen } from "./components/Screen.tsx";
@@ -31,6 +32,46 @@ const DuetPage = lazy(() => import("./components/DuetPage.tsx").then((m) => ({ d
 function showId(): string | null {
   const id = new URLSearchParams(window.location.search).get("show");
   return id && /^[\w-]+$/.test(id) ? id : null;
+}
+
+/**
+ * Record a short video of this tab with Chimera's own sound (recorder.ts); the file downloads
+ * when it stops.
+ */
+function RecordButton() {
+  const [rec, setRec] = useState<Recording | null>(null);
+  const [secs, setSecs] = useState(0);
+  const [note, setNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (!rec) return;
+    const id = setInterval(() => setSecs(rec.elapsed()), 250);
+    return () => clearInterval(id);
+  }, [rec]);
+  const click = async () => {
+    if (rec) return rec.stop();
+    setNote(null);
+    try {
+      const r = await startRecording(({ file, error }) => {
+        setRec(null);
+        setNote(error ?? `Saved ${file} to Downloads`);
+      });
+      setSecs(0);
+      setRec(r);
+    } catch (e) {
+      // the picker cancelled is not worth a message
+      if (!(e instanceof DOMException && e.name === "NotAllowedError")) setNote(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const t = `${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, "0")}`;
+  return (
+    <span className="record">
+      <button type="button" className={`record-btn${rec ? " on" : ""}`} onClick={() => void click()} title={rec ? "Stop and save the video" : `Record this tab with Chimera's sound (up to ${MAX_SECONDS / 60 | 0} min ${MAX_SECONDS % 60} s)`}>
+        <span className="record-dot" aria-hidden="true" />
+        {rec ? `Stop ${t}` : "Record"}
+      </button>
+      {note && <span className="record-note">{note}</span>}
+    </span>
+  );
 }
 
 function TopBar() {
@@ -85,6 +126,7 @@ function TopBar() {
         </div>
       )}
       <div className="topbar-right">
+        {started && <RecordButton />}
         <label className="volume">
           <span>Volume</span>
           <input type="range" min={0} max={1} step={0.01} value={volume} onChange={(e) => setVolume(Number(e.target.value))} style={{ "--pos": `${volume * 100}%` } as React.CSSProperties} />
