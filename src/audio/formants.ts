@@ -155,8 +155,8 @@ export function pickFormants(c: Resonance[], prev1: number, prev2: number): { f1
 }
 
 /**
- * The vowel the mic is saying, steadied for the mouth: F1/F2 picked by continuity, a median of
- * the last three (one bad frame can't steer), then one-pole smoothing in log Hz whose speed
+ * The vowel the mic is saying, steadied for the mouth: F1/F2 picked by continuity, a spike filter
+ * (one bad frame can't steer, and ordinary movement isn't delayed), then one-pole smoothing in log Hz whose speed
  * scales with confidence (frames well under the current speaking level, the starts and ends of
  * words, move it only a little). After a pause it waits for two frames that agree and jumps
  * there, rather than gliding from the old vowel through the onset's noise.
@@ -202,7 +202,17 @@ export class FormantFollower {
       this.waiting = false;
       return { f1: Math.exp(this.s1), f2: Math.exp(this.s2) };
     }
-    const m1 = median(this.hist.map((h) => h.f1)), m2 = median(this.hist.map((h) => h.f2));
+    // spike filter: a big jump away from two steady frames is held back one frame (a real
+    // movement is confirmed by the next frame; a glitch isn't). Unlike a running median, an
+    // ordinary transition passes with no delay.
+    const n = this.hist.length;
+    let m1 = pick.f1, m2 = pick.f2;
+    if (n >= 3) {
+      const [a, b] = [this.hist[n - 3], this.hist[n - 2]];
+      const steady = Math.abs(Math.log(a.f1 / b.f1)) < 0.1 && Math.abs(Math.log(a.f2 / b.f2)) < 0.1;
+      const jump = Math.abs(Math.log(pick.f1 / b.f1)) > 0.25 || Math.abs(Math.log(pick.f2 / b.f2)) > 0.3;
+      if (steady && jump) (m1 = b.f1), (m2 = b.f2);
+    }
     const k = 1 - Math.exp((-dt * Math.min(1, Math.max(0, confidence))) / Math.max(0.001, tau));
     this.s1 += k * (Math.log(m1) - this.s1);
     this.s2 += k * (Math.log(m2) - this.s2);

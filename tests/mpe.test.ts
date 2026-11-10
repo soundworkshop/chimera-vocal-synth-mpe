@@ -328,3 +328,29 @@ test("formant follower: continuity, outliers, quiet edges and fresh starts", asy
   const next = h.update(fr(325, 2240), true, 1, dt, tau)!;
   expect(next.f2).toBeGreaterThan(2200);
 });
+
+test("formant table: the measured inverse lands on target where a straight blend misses", async () => {
+  const { FormantTable } = await import("../src/ui/formantTable.ts");
+  // a stand-in model: formants bend non-linearly with the mouth (as the real airway's do)
+  const F = (a: { jaw: number; tbX: number }) => [250 + 520 * Math.pow(a.jaw / 1.6, 1.8), 800 + 1500 * Math.pow((a.tbX - 1.5) / 2.5, 0.6)];
+  const vowels = [
+    { ipa: "i", jaw: 0.3, tbX: 4.0 },
+    { ipa: "u", jaw: 0.3, tbX: 1.6 },
+    { ipa: "ɑ", jaw: 1.6, tbX: 2.2 },
+    { ipa: "æ", jaw: 1.4, tbX: 3.6 },
+  ].map((v) => ({ ipa: v.ipa, example: "", F1: F(v)[0], F2: F(v)[1], artic: { jaw: v.jaw, tbX: v.tbX } }));
+  const model = { vowels, transfer: (a: { jaw: number; tbX: number }) => ({ freqs: [], db: [], formants: F(a) }) };
+  const neutral = { jaw: 0.8, tbX: 2.8 } as never;
+  const t = new FormantTable(model as never, { neutral, restTip: () => ({ x: 6, y: 8 }) }, 600);
+  while (!t.complete) t.grow(50);
+  // halfway (in log Hz) between "ɑ" and "i"
+  const mid = [Math.sqrt(vowels[2].F1 * vowels[0].F1), Math.sqrt(vowels[2].F2 * vowels[0].F2)];
+  const a = t.lookup(mid[0], mid[1]) as { jaw: number; tbX: number };
+  const got = F(a);
+  expect(Math.abs(Math.log(got[0] / mid[0]))).toBeLessThan(0.04);
+  expect(Math.abs(Math.log(got[1] / mid[1]))).toBeLessThan(0.04);
+  // the naive halfway mouth misses by far more
+  const naive = F({ jaw: (1.6 + 0.3) / 2, tbX: (2.2 + 4.0) / 2 });
+  const err = (f: number[]) => Math.hypot(Math.log(f[0] / mid[0]) * 2.2, Math.log(f[1] / mid[1]));
+  expect(err(naive)).toBeGreaterThan(3 * err(got));
+});

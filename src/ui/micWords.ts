@@ -2,7 +2,8 @@
  * Mic words: the performer's own vowels shape Chimera's mouth. Every animation frame, the
  * microphone's F1/F2 (formants.ts) are mapped into the model's vowel space (a per-performer
  * calibration from "ee", "ah", "oo"), smoothed, and turned into tongue, jaw and lips by the same
- * vowel blend the Vowels screen uses when dragged (VoiceModel.articForFormants). Pitch and breath
+ * mouth Chimera's own acoustics say gives those formants (formantTable.ts; the Vowels screen's
+ * blend until the table is measured). Pitch and breath
  * stay with the keys / MPE; between words (silence, breaths, the end of a word fading out, the
  * room's noise) the mouth holds the last vowel said (VoiceGate).
  * Play mode only: Speak and Sing plan their own articulation.
@@ -16,6 +17,8 @@ import { hissGestures, stopGestures } from "./consonantGestures.ts";
 import { analyzeFormants, applyCalibration, fitCalibration, FormantFollower, IDENTITY_CALIBRATION, median, type FormantCalibration } from "../audio/formants.ts";
 import { useStore } from "./store.ts";
 import { getModel } from "./useModel.ts";
+import { formantTable as tableFor } from "./formantTable.ts";
+import { NEUTRAL, restTip } from "../wasm/engine.ts";
 
 export type MicStatus = "off" | "starting" | "on" | "denied" | "error";
 
@@ -48,19 +51,22 @@ interface MicState extends MicSettings {
 }
 
 const KEY = "chimera-mic-settings";
-const DEFAULTS: MicSettings = { gate: -50, smooth: 30, calibration: { ...IDENTITY_CALIBRATION }, deviceId: "", consonants: true, hissSense: 0.6 };
+const DEFAULTS: MicSettings = { gate: -50, smooth: 15, calibration: { ...IDENTITY_CALIBRATION }, deviceId: "", consonants: true, hissSense: 0.6 };
 
 function load(): MicSettings {
   try {
     const raw = localStorage.getItem(KEY);
-    return { ...DEFAULTS, ...(raw ? JSON.parse(raw) : {}) };
+    const v = raw ? JSON.parse(raw) : {};
+    // settings saved before v2 kept the old 30 ms default, which smeared vowel-to-vowel motion
+    if (!v.v && v.smooth === 30) v.smooth = DEFAULTS.smooth;
+    return { ...DEFAULTS, ...v };
   } catch {
     return { ...DEFAULTS };
   }
 }
 function save(s: MicSettings): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify({ gate: s.gate, smooth: s.smooth, calibration: s.calibration, deviceId: s.deviceId, consonants: s.consonants, hissSense: s.hissSense }));
+    localStorage.setItem(KEY, JSON.stringify({ v: 2, gate: s.gate, smooth: s.smooth, calibration: s.calibration, deviceId: s.deviceId, consonants: s.consonants, hissSense: s.hissSense }));
   } catch {
     // storage blocked: settings last until reload
   }
@@ -90,6 +96,7 @@ let raf = 0;
 let lastT = 0;
 /** smoothed log formants (model space) */
 const follower = new FormantFollower();
+const formantTable = (model: Parameters<typeof tableFor>[0]) => tableFor(model, { neutral: NEUTRAL, restTip });
 
 /** "ee", "ah", "oo": the corners of the vowel space, as the model's calibrated vowels */
 const STEPS = [
@@ -202,7 +209,11 @@ function tick(): void {
   const dt = Math.min(0.1, (now - lastT) / 1000);
   lastT = now;
   const m = useMic.getState();
-  const r = analyzeFormants(frame, ctx.sampleRate);
+  // measure the formant table for this body in the background (a few ms a frame)
+  const growModel = getModel(useStore.getState().body, ctx.sampleRate);
+  formantTable(growModel).grow(3);
+  // the newest 30 ms: shorter than the analyser's 43 ms, so the vowel lags less
+  const r = analyzeFormants(frame.subarray(frame.length - Math.round(0.03 * ctx.sampleRate)), ctx.sampleRate);
   micLive.db = r.db;
   // only frames of the voice itself: not the noise floor, nor the fading end of a word (the
   // mouth then holds the last vowel said)
@@ -234,7 +245,8 @@ function tick(): void {
   if (!v) return;
   const t = applyCalibration(v.f1, v.f2, m.calibration);
   const model = getModel(st.body, ctx.sampleRate);
-  st.setArtic(model.articForFormants(t.f1, t.f2), true);
+  const table = formantTable(model);
+  st.setArtic(table.ready ? table.lookup(t.f1, t.f2) : model.articForFormants(t.f1, t.f2), true);
 }
 
 function calibrateStep(voiced: boolean, f1: number, f2: number): void {
