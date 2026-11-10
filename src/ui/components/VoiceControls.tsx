@@ -20,7 +20,11 @@ const signedCm = (v: number) => ({ value: `${v >= 0 ? "+" : ""}${v.toFixed(1)}`,
  * Play mode's controls: the voice and the articulators without a handle, four at a time
  * (OP-1 style). Values live in the store as before.
  */
-export function VoiceControls() {
+/**
+ * The voice's encoder pages. `only` / `omit` pick pages by name (the duet gives Drive and Reverb
+ * their own screens).
+ */
+export function VoiceControls(props: { only?: string[]; omit?: string[] } = {}) {
   const s = useStore((st) => st.source);
   const setSource = useStore((st) => st.setSource);
   const a = useStore((st) => st.artic);
@@ -134,7 +138,8 @@ export function VoiceControls() {
       ],
     },
   ];
-  return <EncoderPages label="Voice" pages={pages} />;
+  const shown = pages.filter((p) => (!props.only || props.only.includes(p.name)) && !props.omit?.includes(p.name));
+  return <EncoderPages label={props.only?.length === 1 ? props.only[0] : "Voice"} pages={shown} />;
 }
 
 /** Hold breath and Whisper, for the voice screen's header. */

@@ -311,9 +311,15 @@ function DuetWall() {
       </Screen>
       <div className="duet-center">
         <Screen className="s-voice" title="Voice" sub="Both voices" tools={<VoiceToggles />}>
-          <VoiceControls />
+          <VoiceControls omit={["Drive", "Reverb"]} />
         </Screen>
-        <Screen className="s-keys" title="Keys" sub="Left: first note, right: second">
+        <Screen className="duet-drive" title="Distortion" sub="Both voices, before the reverb">
+          <VoiceControls only={["Drive"]} />
+        </Screen>
+        <Screen className="duet-reverb" title="Reverb" sub="Plate">
+          <VoiceControls only={["Reverb"]} />
+        </Screen>
+        <Screen className="s-keys s-keys-compact" title="Keys" sub="Left: first note, right: second">
           <Keys />
         </Screen>
       </div>

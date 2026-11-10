@@ -3093,7 +3093,9 @@ input[type="range"]::-moz-range-thumb {
 .duet-center {
   grid-area: center;
   display: grid;
-  grid-template-rows: auto minmax(min-content, 1fr);
+  /* Voice, Distortion, Reverb as tall as their controls; the keys a short strip below */
+  grid-template-rows: auto auto auto minmax(90px, 150px);
+  align-content: start;
   gap: 12px;
   min-width: 0;
 }
