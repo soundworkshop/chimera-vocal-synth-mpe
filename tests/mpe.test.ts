@@ -1,7 +1,7 @@
 /**
  * MPE input, the touch curve and the plate reverb: plain TypeScript, no wasm needed.
  */
-import { modVelum, VELUM_MAX, VELUM_MIN } from "../src/ui/velumMod.ts";
+import { noseAt, VELUM_MAX, VELUM_MIN } from "../src/ui/velumMod.ts";
 import { describe, expect, test } from "bun:test";
 import { connectMidi, type MpeVoice } from "../src/ui/midi.ts";
 import { DEFAULT_TOUCH, touchToBreath } from "../src/ui/touch.ts";
@@ -479,16 +479,18 @@ test("eight voices: eight held notes, one per voice; a ninth, higher note takes 
   expect(after).not.toContain(60);
 });
 
-describe("volume envelope → soft palate", () => {
-  test("depth 0 or silence leaves the dial's setting", () => {
-    expect(modVelum(0.3, 0, 1)).toBeCloseTo(0.3);
-    expect(modVelum(0.3, 0.8, 0)).toBeCloseTo(0.3);
+describe("volume envelope → soft palate (Nose sliders)", () => {
+  test("quiet end when silent, loud end when full, straight between", () => {
+    const p = { quiet: -0.25, loud: 0.9 };
+    expect(noseAt(p, 0)).toBeCloseTo(-0.25);
+    expect(noseAt(p, 1)).toBeCloseTo(0.9);
+    expect(noseAt(p, 0.5)).toBeCloseTo(0.325);
   });
-  test("positive depth opens with loudness, negative closes, both inside the dial's range", () => {
-    expect(modVelum(-0.25, 1, 1)).toBeCloseTo(VELUM_MAX);
-    expect(modVelum(-0.25, 0.5, 0.5)).toBeGreaterThan(0);
-    expect(modVelum(1.2, -1, 1)).toBeCloseTo(VELUM_MIN);
-    expect(modVelum(0.5, 1, 2)).toBe(VELUM_MAX);
-    expect(modVelum(0, -1, 0.9)).toBe(VELUM_MIN);
+  test("closing with loudness works, equal ends hold still, and it stays in range", () => {
+    expect(noseAt({ quiet: 1, loud: 0 }, 0.75)).toBeCloseTo(0.25);
+    expect(noseAt({ quiet: 0.4, loud: 0.4 }, 0.6)).toBeCloseTo(0.4);
+    expect(noseAt({ quiet: 0, loud: 1.2 }, 3)).toBe(VELUM_MAX);
+    expect(noseAt({ quiet: 2, loud: -1 }, 0)).toBe(VELUM_MAX);
+    expect(noseAt({ quiet: 2, loud: -1 }, 1)).toBe(VELUM_MIN);
   });
 });

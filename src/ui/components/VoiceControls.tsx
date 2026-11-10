@@ -3,7 +3,7 @@ import { mpeLive, POLYPHONY, touchToBreath, useStore } from "../store.ts";
 import { V } from "../colors.ts";
 import { DISTORTION_TYPES } from "../../audio/distortion.ts";
 import { micLive, useMic } from "../micWords.ts";
-import { useEnvMod } from "../envMod.ts";
+import { useNose } from "../envMod.ts";
 import { EncoderPages, type EncoderPage } from "./Encoder.tsx";
 import { Chip } from "./Screen.tsx";
 
@@ -37,7 +37,8 @@ export function VoiceControls(props: { only?: string[]; omit?: string[] } = {}) 
   const mic = useMic();
   const r = useStore((st) => st.reverb);
   const setReverb = useStore((st) => st.setReverb);
-  const mod = useEnvMod();
+  const nose = useNose((n) => n.voices[0]);
+  const setNose = useNose((n) => n.setBoth);
   const pages: EncoderPage[] = [
     {
       name: "Voice",
@@ -115,21 +116,6 @@ export function VoiceControls(props: { only?: string[]; omit?: string[] } = {}) 
       ],
     },
     {
-      // the volume envelope (PT2 pressure after the touch curve) moves the soft palate: + opens the
-      // nose as it gets louder, − closes it; the Throat page's Soft palate is where it starts
-      name: "Mod",
-      encoders: [
-        {
-          label: "Env → Nose",
-          value: mod.velum,
-          min: -1,
-          max: 1,
-          onChange: mod.setVelum,
-          format: (v) => (Math.abs(v) < 0.01 ? { value: "Off", unit: "" } : { value: `${v > 0 ? "+" : "−"}${Math.round(Math.abs(v) * 100)}`, unit: "%" }),
-        },
-      ],
-    },
-    {
       name: "Mouth",
       encoders: [
         { label: "Rounding", value: 1 - a.lipWidth, min: 0, max: 1, onChange: (v) => setArtic({ lipWidth: 1 - v }), format: pct },
@@ -148,7 +134,8 @@ export function VoiceControls(props: { only?: string[]; omit?: string[] } = {}) 
     {
       name: "Throat",
       encoders: [
-        { label: "Soft palate", value: a.velum, min: -0.25, max: 1.2, onChange: (v) => setArtic({ velum: v }), format: (v) => (v <= 0 ? { value: "Shut", unit: "" } : { value: v.toFixed(2), unit: "cm²" }) },
+        // sets both ends of the left voice's Nose sliders (the Vowels map's left edge)
+        { label: "Soft palate", value: nose.quiet, min: -0.25, max: 1.2, onChange: (v) => (setNose(0, v), setArtic({ velum: v })), format: (v) => (v <= 0 ? { value: "Shut", unit: "" } : { value: v.toFixed(2), unit: "cm²" }) },
         { label: "Larynx", value: a.larynx, min: -1.5, max: 1.5, onChange: (v) => setArtic({ larynx: v }), format: signedCm },
         { label: "Twang", value: a.epilarynx, min: 0, max: 1, onChange: (v) => setArtic({ epilarynx: v }), format: pct },
         { label: "False folds", value: a.ventricular, min: 0, max: 1, onChange: (v) => setArtic({ ventricular: v }), format: pct },

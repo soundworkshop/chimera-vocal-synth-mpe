@@ -1,75 +1,101 @@
 /**
- * Volume-envelope modulation: the envelope (the breath PT2's pressure gives after the touch curve,
- * 0..1, the same one the vowel sweep rides) moves the soft palate by a bipolar depth. The Throat
- * page's Soft palate dial stays the base; the modulated opening goes straight to the engine, so the
- * dial doesn't jump around. Play mode only. In the duet each voice follows its own envelope, and
- * voice 2 (whose mouth is its own there) gets the base too, so the dial reaches it.
+ * The soft palate under the volume envelope: each voice has a quiet end and a loud end (the two
+ * sliders on the left of its Vowels map), and the envelope (the breath PT2's pressure gives after
+ * the touch curve, 0..1, the one the vowel sweep rides) places the opening between them. Ends
+ * equal: a fixed opening. Play mode only.
+ *
+ * In the duet each voice has its own pair and follows its own envelope; linked, the right voice
+ * uses the left one's pair. Elsewhere voice 1's pair moves every voice (they share its mouth).
+ * The Throat page's Soft palate dial sets both of voice 1's ends at once.
  */
 import { create } from "zustand";
 import { engine } from "../audio/AudioEngine.ts";
+import { NEUTRAL } from "../wasm/engine.ts";
 import { mpeLive, useStore } from "./store.ts";
-import { duetOn, setVoice2Artic } from "./duet.ts";
-import { modVelum } from "./velumMod.ts";
+import { duetOn, setVoice2Artic, settingsOf } from "./duet.ts";
+import { noseAt, VELUM_MAX, VELUM_MIN, type NosePair } from "./velumMod.ts";
 
-const KEY = "chimera-env-mod";
+export type { NosePair };
 
-function load(): number {
+const KEY = "chimera-nose";
+
+const clamp = (v: number) => Math.min(VELUM_MAX, Math.max(VELUM_MIN, v));
+
+function load(): [NosePair, NosePair] {
+  const flat = (): NosePair => ({ quiet: NEUTRAL.velum, loud: NEUTRAL.velum });
   try {
     const v = JSON.parse(localStorage.getItem(KEY) ?? "{}");
-    return typeof v.velum === "number" ? Math.max(-1, Math.min(1, v.velum)) : 0;
+    const ok = (p: unknown): p is NosePair => !!p && typeof (p as NosePair).quiet === "number" && typeof (p as NosePair).loud === "number";
+    return Array.isArray(v.voices) ? [ok(v.voices[0]) ? v.voices[0] : flat(), ok(v.voices[1]) ? v.voices[1] : flat()] : [flat(), flat()];
   } catch {
-    return 0;
+    return [flat(), flat()];
   }
 }
 
-interface EnvModState {
-  /** soft palate depth, -1..1 (0 off) */
-  velum: number;
-  setVelum: (v: number) => void;
+interface NoseState {
+  /** [voice 1, voice 2] */
+  voices: [NosePair, NosePair];
+  setEnd: (voice: number, which: keyof NosePair, v: number) => void;
+  /** both ends (a fixed opening) */
+  setBoth: (voice: number, v: number) => void;
 }
 
-export const useEnvMod = create<EnvModState>((set) => ({
-  velum: load(),
-  setVelum: (v) => {
-    const velum = Math.abs(v) < 0.01 ? 0 : Math.max(-1, Math.min(1, v));
-    set({ velum });
+export const useNose = create<NoseState>((set, get) => {
+  const put = (voice: number, p: NosePair) => {
+    const voices = [...get().voices] as [NosePair, NosePair];
+    voices[voice] = p;
+    set({ voices });
     try {
-      localStorage.setItem(KEY, JSON.stringify({ velum }));
+      localStorage.setItem(KEY, JSON.stringify({ voices }));
     } catch {
       // storage blocked: kept until reload
     }
-  },
-}));
+  };
+  return {
+    voices: load(),
+    setEnd: (voice, which, v) => put(voice, { ...get().voices[voice], [which]: clamp(v) }),
+    setBoth: (voice, v) => put(voice, { quiet: clamp(v), loud: clamp(v) }),
+  };
+});
 
-/** what each voice was last sent (null: not driven) */
-const sent: (number | null)[] = [null, null];
+/** where each voice's opening is now, for the sliders' dot (null when not in Play) */
+export const noseLive: { t: number; v: number | null }[] = [
+  { t: 0, v: null },
+  { t: 0, v: null },
+];
+
+let wasPlay = false;
 
 function tick(): void {
   requestAnimationFrame(tick);
   const st = useStore.getState();
-  const depth = useEnvMod.getState().velum;
   const play = st.mode === "play" && !!engine.ctx;
   const duet = play && duetOn();
-  const base = st.artic.velum ?? 0;
-  // voice 1 (and the voices that share its mouth): driven while the depth is on; back to the dial
-  // once when it goes off
-  if (play && depth !== 0) {
-    const v = modVelum(base, depth, duet ? (mpeLive.breaths[0] ?? 0) : mpeLive.breath);
-    // every frame: something else may have sent the dial's value since (coalesced, so cheap)
-    engine.setArtic({ velum: v });
-    sent[0] = v;
-  } else if (sent[0] !== null) {
-    if (play) engine.setArtic({ velum: base });
-    sent[0] = null;
+  const pairs = useNose.getState().voices;
+  if (!play) {
+    // back to the store's posture once on leaving Play
+    if (wasPlay && engine.ctx) engine.setArtic({ velum: st.artic.velum });
+    wasPlay = false;
+    noseLive[0].v = noseLive[1].v = null;
+    return;
   }
-  // voice 2 in the duet has its own mouth: it follows the dial, plus its own envelope
+  wasPlay = true;
+  const t0 = duet ? (mpeLive.breaths[0] ?? 0) : mpeLive.breath;
+  const v0 = noseAt(pairs[0], t0);
+  noseLive[0].t = t0;
+  noseLive[0].v = v0;
+  // every frame: something else (a posture, a preset) may have sent another opening since; the
+  // engine coalesces it with the frame's other changes
+  engine.setArtic({ velum: v0 });
   if (duet) {
-    const v = depth !== 0 ? modVelum(base, depth, mpeLive.breaths[1] ?? 0) : base;
-    if (sent[1] === null || Math.abs(v - sent[1]) > 0.003) {
-      setVoice2Artic({ velum: v });
-      sent[1] = v;
-    }
-  } else sent[1] = null;
+    const t1 = mpeLive.breaths[1] ?? 0;
+    const v1 = noseAt(pairs[settingsOf(1)], t1);
+    noseLive[1].t = t1;
+    noseLive[1].v = v1;
+    setVoice2Artic({ velum: v1 });
+  } else {
+    noseLive[1].v = null;
+  }
 }
 
 requestAnimationFrame(tick);

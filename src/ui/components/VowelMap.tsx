@@ -12,6 +12,22 @@ import { Chip } from "./Screen.tsx";
 import { sweepLive, useSweep, type SweepEnd } from "../vowelSweep.ts";
 import { getModel } from "../useModel.ts";
 import { setVoice2Artic, settingsOf, useDuet, voice2Live } from "../duet.ts";
+import { noseLive, useNose, type NosePair } from "../envMod.ts";
+import { VELUM_MAX, VELUM_MIN } from "../velumMod.ts";
+
+/** the Nose sliders' strip on the map's left edge (CSS px), and their two columns */
+const NOSE_W = 50;
+const NOSE_X = { quiet: 16, loud: 38 } as const;
+/** the sliders' track: top (open) and bottom (shut) */
+const noseY = (h: number) => ({ top: 30, bottom: h - 30 });
+const noseToY = (v: number, h: number) => {
+  const { top, bottom } = noseY(h);
+  return bottom - ((v - VELUM_MIN) / (VELUM_MAX - VELUM_MIN)) * (bottom - top);
+};
+const noseFromY = (y: number, h: number) => {
+  const { top, bottom } = noseY(h);
+  return VELUM_MIN + Math.min(1, Math.max(0, (bottom - y) / (bottom - top))) * (VELUM_MAX - VELUM_MIN);
+};
 
 /**
  * Vowel map in the phonetician's orientation: F2 decreasing left→right, F1 increasing downward.
@@ -34,6 +50,8 @@ export function VowelMap(props: { voice?: number }) {
   const dragging = useRef(false);
   /** which sweep end is being dragged, if any */
   const dragEnd = useRef<"a" | "b" | null>(null);
+  /** which Nose slider is being dragged, if any */
+  const dragNose = useRef<keyof NosePair | null>(null);
   const range = () => {
     const b = bodyOf();
     const at = (male: number, female: number, child: number) => blendLog(b, { male, female, child });
@@ -42,14 +60,14 @@ export function VowelMap(props: { voice?: number }) {
   const toXY = (F1: number, F2: number, w: number, h: number) => {
     const r = range();
     const pad = 18;
-    const x = pad + ((Math.log(r.f2[1]) - Math.log(F2)) / (Math.log(r.f2[1]) - Math.log(r.f2[0]))) * (w - 2 * pad);
+    const x = pad + NOSE_W + ((Math.log(r.f2[1]) - Math.log(F2)) / (Math.log(r.f2[1]) - Math.log(r.f2[0]))) * (w - 2 * pad - NOSE_W);
     const y = pad + ((Math.log(F1) - Math.log(r.f1[0])) / (Math.log(r.f1[1]) - Math.log(r.f1[0]))) * (h - 2 * pad);
     return { x, y };
   };
   const fromXY = (x: number, y: number, w: number, h: number) => {
     const r = range();
     const pad = 18;
-    const u = Math.min(1, Math.max(0, (x - pad) / (w - 2 * pad)));
+    const u = Math.min(1, Math.max(0, (x - pad - NOSE_W) / (w - 2 * pad - NOSE_W)));
     const v = Math.min(1, Math.max(0, (y - pad) / (h - 2 * pad)));
     const F2 = Math.exp(Math.log(r.f2[1]) - u * (Math.log(r.f2[1]) - Math.log(r.f2[0])));
     const F1 = Math.exp(Math.log(r.f1[0]) + v * (Math.log(r.f1[1]) - Math.log(r.f1[0])));
@@ -110,14 +128,43 @@ export function VowelMap(props: { voice?: number }) {
         ctx.restore();
       }
     }
+    // the Nose sliders: the soft palate at the quiet and the loud end of the volume envelope
+    const np = useNose.getState().voices[settingsOf(voice)];
+    const ny = noseY(h);
+    seg(ctx, NOSE_W + 4, 10, NOSE_W + 4, h - 10, V.frame, 1);
+    label(ctx, "NOSE", (NOSE_X.quiet + NOSE_X.loud) / 2, 14, { size: 8, color: V.pink, align: "center", ls: 0.1 });
+    for (const k of ["quiet", "loud"] as const) seg(ctx, NOSE_X[k], ny.top, NOSE_X[k], ny.bottom, V.blueDim, 1);
+    // where it shuts
+    const y0 = noseToY(0, h);
+    seg(ctx, NOSE_X.quiet - 6, y0, NOSE_X.loud + 6, y0, V.blueDim, 1, { alpha: 0.8 });
+    const qy = noseToY(np.quiet, h), ly = noseToY(np.loud, h);
+    seg(ctx, NOSE_X.quiet, qy, NOSE_X.loud, ly, V.pink, 1.5, { alpha: 0.9 });
+    handle(ctx, NOSE_X.quiet, qy, V.pink, 6);
+    handle(ctx, NOSE_X.loud, ly, V.pink, 6);
+    label(ctx, "Q", NOSE_X.quiet, h - 12, { size: 9, color: V.pink, align: "center" });
+    label(ctx, "L", NOSE_X.loud, h - 12, { size: 9, color: V.pink, align: "center" });
+    const nl = noseLive[voice];
+    if (nl && nl.v !== null) {
+      const t = Math.min(1, Math.max(0, nl.t));
+      ctx.save();
+      ctx.fillStyle = V.pink;
+      ctx.beginPath();
+      ctx.arc(NOSE_X.quiet + (NOSE_X.loud - NOSE_X.quiet) * t, qy + (ly - qy) * t, 3.5, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.restore();
+    }
     label(ctx, "F2", w - 6, h - 5, { size: 9, color: TEXT.secondary, align: "right", ls: 0.1 });
-    label(ctx, "F1", 4, h - 5, { size: 9, color: TEXT.secondary, ls: 0.1 });
+    label(ctx, "F1", NOSE_W + 8, h - 5, { size: 9, color: TEXT.secondary, ls: 0.1 });
   });
 
   const apply = (e: React.PointerEvent) => {
+    const r = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
+    if (dragNose.current) {
+      useNose.getState().setEnd(settingsOf(voice), dragNose.current, noseFromY(e.clientY - r.top, r.height));
+      return;
+    }
     const m = model.current;
     if (!m) return;
-    const r = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
     const { F1, F2 } = fromXY(e.clientX - r.left, e.clientY - r.top, r.width, r.height);
     const sweep = useSweep.getState();
     // with the sweep on, drags move its ends (the volume places the vowel)
@@ -148,14 +195,17 @@ export function VowelMap(props: { voice?: number }) {
       ref={ref}
       className="vowel-map"
       onPointerDown={(e) => {
-        dragEnd.current = pickEnd(e);
+        const x = e.clientX - (e.currentTarget as HTMLCanvasElement).getBoundingClientRect().left;
+        // the left strip is the Nose sliders: the nearer column
+        dragNose.current = x < NOSE_W + 4 ? (x < (NOSE_X.quiet + NOSE_X.loud) / 2 ? "quiet" : "loud") : null;
+        dragEnd.current = dragNose.current ? null : pickEnd(e);
         dragging.current = true;
         (e.target as Element).setPointerCapture(e.pointerId);
         apply(e);
       }}
       onPointerMove={(e) => dragging.current && apply(e)}
-      onPointerUp={() => ((dragging.current = false), (dragEnd.current = null))}
-      onPointerCancel={() => ((dragging.current = false), (dragEnd.current = null))}
+      onPointerUp={() => ((dragging.current = false), (dragEnd.current = null), (dragNose.current = null))}
+      onPointerCancel={() => ((dragging.current = false), (dragEnd.current = null), (dragNose.current = null))}
       aria-label="Vowel map. Drag to morph between vowels."
       role="slider"
       aria-valuetext="vowel position"
