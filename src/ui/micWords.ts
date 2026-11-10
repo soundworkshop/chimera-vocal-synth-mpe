@@ -3,12 +3,14 @@
  * microphone's F1/F2 (formants.ts) are mapped into the model's vowel space (a per-performer
  * calibration from "ee", "ah", "oo"), smoothed, and turned into tongue, jaw and lips by the same
  * vowel blend the Vowels screen uses when dragged (VoiceModel.articForFormants). Pitch and breath
- * stay with the keys / MPE; below the gate (silence, breaths) the mouth holds its last shape.
+ * stay with the keys / MPE; between words (silence, breaths, the end of a word fading out, the
+ * room's noise) the mouth holds the last vowel said (VoiceGate).
  * Play mode only: Speak and Sing plan their own articulation.
  */
 import { create } from "zustand";
 import { engine } from "../audio/AudioEngine.ts";
 import { MicInput, listInputs } from "../audio/micInput.ts";
+import { VoiceGate } from "../audio/voiceGate.ts";
 import { analyzeFormants, applyCalibration, fitCalibration, IDENTITY_CALIBRATION, median, type FormantCalibration } from "../audio/formants.ts";
 import { useStore } from "./store.ts";
 import { getModel } from "./useModel.ts";
@@ -62,6 +64,7 @@ function save(s: MicSettings): void {
 export const micLive = { db: -120, f1: 0, f2: 0, active: false };
 
 const mic = new MicInput();
+const voiceGate = new VoiceGate();
 /** bumped by every on/off, so a slow permission answer for an older attempt is ignored */
 let attempt = 0;
 let waitTimer: ReturnType<typeof setTimeout> | undefined;
@@ -116,6 +119,7 @@ export const useMic = create<MicState>((set, get) => ({
         clearTimeout(waitTimer);
         set({ status: "on", problem: null, inputs: await listInputs() });
         s1 = s2 = 0;
+        voiceGate.reset();
         lastT = performance.now();
         cancelAnimationFrame(raf);
         raf = requestAnimationFrame(tick);
@@ -180,7 +184,9 @@ function tick(): void {
   const m = useMic.getState();
   const r = analyzeFormants(frame, ctx.sampleRate);
   micLive.db = r.db;
-  const voiced = r.db > m.gate && r.f1 > 0 && r.f2 > 0;
+  // only frames of the voice itself: not the noise floor, nor the fading end of a word (the
+  // mouth then holds the last vowel said)
+  const voiced = voiceGate.update(r.db, dt, m.gate) && r.f1 > 0 && r.f2 > 0;
   micLive.active = voiced;
   if (voiced) (micLive.f1 = r.f1), (micLive.f2 = r.f2);
 

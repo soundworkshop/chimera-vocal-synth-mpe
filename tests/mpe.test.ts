@@ -193,3 +193,30 @@ test("formant calibration: maps a speaker's corner vowels onto the model's", asy
     expect(m.f2).toBeCloseTo(model[i].f2, 0);
   }
 });
+
+test("voice gate: follows a word, ignores its fading end, the noise floor and a steady hum", async () => {
+  const { VoiceGate } = await import("../src/audio/voiceGate.ts");
+  const g = new VoiceGate();
+  const dt = 1 / 60;
+  const run = (db: number, seconds: number) => {
+    const out: boolean[] = [];
+    for (let t = 0; t < seconds; t += dt) out.push(g.update(db, dt, -60));
+    return out;
+  };
+  // quiet room (above the -60 gate: an earbud mic's hiss)
+  expect(run(-55, 1).some(Boolean)).toBe(false);
+  // a word
+  expect(run(-30, 0.5).every(Boolean)).toBe(true);
+  // its end fading out: once 15 dB down, ignored
+  const fade: boolean[] = [];
+  for (let db = -30; db > -55; db -= 2.5) fade.push(g.update(db, dt, -60));
+  expect(fade.slice(0, 3).every(Boolean)).toBe(true);
+  expect(fade.slice(7).some(Boolean)).toBe(false);
+  // back to the hiss: ignored
+  expect(run(-55, 2).some(Boolean)).toBe(false);
+  // a quieter next word still counts
+  expect(run(-38, 0.5).every(Boolean)).toBe(true);
+  // a steady hum that starts later is learnt within a few seconds
+  const hum = run(-44, 6);
+  expect(hum.slice(-60).some(Boolean)).toBe(false);
+});
