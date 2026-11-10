@@ -3029,3 +3029,27 @@ input[type="range"]::-moz-range-thumb {
   font-size: 11px;
   color: var(--text-dim);
 }
+
+/* a row of mutually exclusive choices above an encoder page (distortion type) */
+.seg {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 8px;
+}
+
+.seg-btn {
+  flex: 1;
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--blue-dim);
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.seg-btn.on {
+  color: var(--amber);
+  border-color: var(--amber);
+}

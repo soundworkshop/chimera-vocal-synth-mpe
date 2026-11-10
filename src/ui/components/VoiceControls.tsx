@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { mpeLive, touchToBreath, useStore } from "../store.ts";
 import { V } from "../colors.ts";
+import { DISTORTION_TYPES } from "../../audio/distortion.ts";
 import { micLive, useMic } from "../micWords.ts";
 import { EncoderPages, type EncoderPage } from "./Encoder.tsx";
 import { Chip } from "./Screen.tsx";
@@ -67,6 +68,15 @@ export function VoiceControls() {
     {
       // before the reverb: Drive 0 is clean, Level 50% is unity
       name: "Drive",
+      above: (
+        <div className="seg" role="radiogroup" aria-label="Distortion type">
+          {DISTORTION_TYPES.map((t) => (
+            <button key={t.id} type="button" role="radio" aria-checked={d.type === t.id} className={`seg-btn${d.type === t.id ? " on" : ""}`} onClick={() => setDistortion({ type: t.id })}>
+              {t.name}
+            </button>
+          ))}
+        </div>
+      ),
       encoders: [
         { label: "Drive", value: d.drive, min: 0, max: 1, onChange: (v) => setDistortion({ drive: v }), format: pct },
         { label: "Tone", value: d.tone, min: 0, max: 1, onChange: (v) => setDistortion({ tone: v }), format: (v) => { const hz = 700 * Math.pow(16000 / 700, v); return { value: hz >= 1000 ? (hz / 1000).toFixed(1) : hz.toFixed(0), unit: hz >= 1000 ? "kHz" : "Hz" }; } },

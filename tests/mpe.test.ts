@@ -427,3 +427,28 @@ test("consonants: the hiss amount rises and falls with the hiss, not on/off", as
   const mids = amounts.filter((a) => a > 0.1 && a < peak * 0.85);
   expect(mids.length).toBeGreaterThanOrEqual(4);
 });
+
+test("distortion types: all clean at drive 0; hard flattens, fold folds, all bounded", async () => {
+  const { shapeCurve, driveMakeup } = await import("../src/audio/distortion.ts");
+  const at = (c: Float32Array, x: number) => c[Math.round(((x + 1) / 2) * (c.length - 1))];
+  for (const type of ["soft", "hard", "fold"] as const) {
+    const clean = shapeCurve(0, type);
+    for (const x of [-1, -0.4, 0.2, 0.7, 1]) expect(Math.abs(at(clean, x) - x)).toBeLessThan(0.006);
+    expect(driveMakeup(0, type)).toBeCloseTo(1, 2);
+    const hot = shapeCurve(1, type);
+    for (const v of hot) expect(Math.abs(v)).toBeLessThanOrEqual(1.0001 * (type === "soft" ? 2 : 1));
+    expect(driveMakeup(1, type)).toBeLessThan(0.3);
+  }
+  // hard: flat at the rails well before full scale
+  const hard = shapeCurve(1, "hard");
+  expect(at(hard, 0.1)).toBeCloseTo(1, 5);
+  expect(at(hard, 0.9)).toBeCloseTo(1, 5);
+  // fold: goes up and comes back down (not monotonic), several times
+  const fold = shapeCurve(1, "fold");
+  let turns = 0;
+  for (let i = 2; i < fold.length; i++) if (Math.sign(fold[i] - fold[i - 1]) !== Math.sign(fold[i - 1] - fold[i - 2])) turns++;
+  expect(turns).toBeGreaterThanOrEqual(8);
+  // halfway: a soft middle that has started to fold
+  const mid = shapeCurve(0.5, "fold");
+  expect(Math.max(...mid)).toBeCloseTo(1, 2);
+});

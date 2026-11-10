@@ -42,7 +42,8 @@ export class AudioEngine {
   /** distortion between the voice (or its close-mic chain) and the master */
   private dist: { input: GainNode; shaper: WaveShaperNode; tone: BiquadFilterNode; makeup: GainNode; wet: GainNode; dry: GainNode; level: GainNode } | null = null;
   private distSettings: DistortionSettings = { ...DEFAULT_DISTORTION };
-  private distDrive = -1;
+  /** the drive and type the shaper's curve was built for */
+  private distCurve = "";
   /** "close mic" chain: proximity bass, presence, compression (beatboxers cup the mic) */
   private micIn: AudioNode | null = null;
   private micOn = false;
@@ -355,12 +356,13 @@ export class AudioEngine {
     if (!d || !ctx) return;
     const s = this.distSettings;
     // the curve is rebuilt only when drive moves (a 4096-point table)
-    if (s.drive !== this.distDrive) {
-      d.shaper.curve = shapeCurve(s.drive);
-      this.distDrive = s.drive;
+    const key = `${s.type}:${s.drive}`;
+    if (key !== this.distCurve) {
+      d.shaper.curve = shapeCurve(s.drive, s.type);
+      this.distCurve = key;
     }
     const set = (p: AudioParam, v: number) => (smooth > 0 ? p.setTargetAtTime(v, ctx.currentTime, smooth) : (p.value = v));
-    set(d.makeup.gain, driveMakeup(s.drive));
+    set(d.makeup.gain, driveMakeup(s.drive, s.type));
     set(d.tone.frequency, toneHz(s.tone));
     // equal-power crossfade, so half-way isn't a dip
     set(d.wet.gain, Math.sin((s.mix * Math.PI) / 2));
