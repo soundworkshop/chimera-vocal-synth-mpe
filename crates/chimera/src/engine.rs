@@ -46,6 +46,9 @@ pub struct VoiceInfo {
 
 pub struct Engine {
     pub sample_rate: f64,
+    /// the airway's oversampling (None: by sample rate, 2× up to 60 kHz). A lighter 1× lets
+    /// several voices share one audio thread.
+    oversample: Option<usize>,
     body: BodyMix,
     voice: HumanVoice,
     /// the performer's breath (the voice's own gate also follows the score)
@@ -60,13 +63,19 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(sample_rate: f64) -> Engine {
-        crate::init();
-        let body = BodyMix::MALE;
-        Engine { sample_rate, body, voice: Self::make_voice(sample_rate, body), gate_level: 0.0, pos: 0, scratch: Vec::with_capacity(MAX_SCHEDULE), beat: BeatPlayer::new(), creature: None }
+        Self::with_oversampling(sample_rate, None)
     }
 
-    fn make_voice(fs: f64, body: BodyMix) -> HumanVoice {
-        let mut v = HumanVoice::new(fs, body.body(), if fs > 60000.0 { 1 } else { 2 });
+    /// An engine whose airway runs at `oversample`× the sample rate (None: the default for it).
+    pub fn with_oversampling(sample_rate: f64, oversample: Option<usize>) -> Engine {
+        crate::init();
+        let body = BodyMix::MALE;
+        let oversample = oversample.map(|o| o.clamp(1, 4));
+        Engine { sample_rate, oversample, body, voice: Self::make_voice(sample_rate, body, oversample), gate_level: 0.0, pos: 0, scratch: Vec::with_capacity(MAX_SCHEDULE), beat: BeatPlayer::new(), creature: None }
+    }
+
+    fn make_voice(fs: f64, body: BodyMix, oversample: Option<usize>) -> HumanVoice {
+        let mut v = HumanVoice::new(fs, body.body(), oversample.unwrap_or(if fs > 60000.0 { 1 } else { 2 }));
         v.set_source(&SourcePatch::f0(default_f0(body)));
         v
     }
@@ -88,7 +97,7 @@ impl Engine {
     pub fn set_body(&mut self, body: impl Into<BodyMix>) -> VoiceInfo {
         let body: BodyMix = body.into();
         let body = BodyMix::new(body.female, body.child);
-        let prev = core::mem::replace(&mut self.voice, Self::make_voice(self.sample_rate, body));
+        let prev = core::mem::replace(&mut self.voice, Self::make_voice(self.sample_rate, body, self.oversample));
         self.body = body;
         let mut src = SourcePatch::from_source(&prev.source);
         src.f0 = Some(default_f0(body));

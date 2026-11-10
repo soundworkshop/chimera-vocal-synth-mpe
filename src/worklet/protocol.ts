@@ -19,6 +19,8 @@ export type ToWorklet =
   | { type: "artic"; values: Partial<HumanArtic>; tipFree?: boolean }
   | { type: "source"; values: Partial<VoiceSource> }
   | { type: "gate"; level: number }
+  /** a polyphony voice with no note: stop rendering (output silence) until woken */
+  | { type: "sleep"; asleep: boolean }
   | { type: "telemetry"; enabled: boolean }
   /** gestures planned on the main thread with times relative to "now" (the worklet adds its clock) */
   | { type: "schedule"; gestures: Gesture[]; segments: PlannedSegment[]; end: number; id: number; replace: boolean; lead?: number }

@@ -136,8 +136,16 @@ pub struct Handle {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn engine_new(sample_rate: f64) -> *mut Handle {
+    engine_new_os(sample_rate, 0)
+}
+
+/// An engine whose airway runs at `oversample`× (0: the default for the sample rate). Extra
+/// voices for polyphony use 1× to share the one audio thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn engine_new_os(sample_rate: f64, oversample: u32) -> *mut Handle {
+    let os = if oversample == 0 { None } else { Some(oversample as usize) };
     let mut h = Box::new(Handle {
-        engine: Engine::new(sample_rate),
+        engine: Engine::with_oversampling(sample_rate, os),
         out: vec![0.0; MAX_RENDER],
         records: vec![0u8; MAX_SCHEDULE * GESTURE_RECORD],
         gestures: Vec::with_capacity(MAX_SCHEDULE),

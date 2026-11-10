@@ -3053,3 +3053,17 @@ input[type="range"]::-moz-range-thumb {
   color: var(--amber);
   border-color: var(--amber);
 }
+
+/* polyphony choice in the Voice header: "Voices 1 2 8" */
+.poly {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.poly-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin-right: 2px;
+}

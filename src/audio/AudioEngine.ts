@@ -29,12 +29,17 @@ export class AudioEngine {
   private out: AudioNode | null = null;
   private reverbSettings: ReverbSettings = { ...DEFAULT_REVERB };
   /**
-   * Second voice (two-voice MPE): another engine instance, created only while two voices are on.
-   * It mirrors the first voice's body, articulation and tone (same mouth, same formants); only
-   * its pitch, glide, breath and gate are its own. Both feed the same distortion and reverb.
+   * Polyphony: voices 2…N, each another engine instance, created only while polyphony is on. They
+   * mirror the first voice's body, articulation and tone (same mouth, same formants); only their
+   * pitch, glide, breath and gate are their own. All feed the same distortion and reverb. A voice
+   * with no note sleeps (renders nothing), so the cost is the notes held. With more than two
+   * voices the extra ones run a lighter airway (1× instead of 2×, about a third of the work): they
+   * all share the browser's one audio thread.
    */
-  private node2: AudioWorkletNode | null = null;
-  private twoVoices = false;
+  private extras: { node: AudioWorkletNode; asleep: boolean }[] = [];
+  private voiceCount = 1;
+  /** the airway oversampling the extra voices were built with (0: the default) */
+  private extrasOs = -1;
   private mirrorBody: BodyMix | null = null;
   private mirrorArtic: Partial<HumanArtic> = {};
   private mirrorTipFree: boolean | undefined;
@@ -142,7 +147,7 @@ export class AudioEngine {
     shelf.connect(presence).connect(comp).connect(makeup).connect(dist.input);
     this.micIn = shelf;
     node.connect(this.micOn ? shelf : dist.input);
-    if (this.twoVoices) this.createVoice2();
+    this.syncVoices();
     // the reverb is optional: if its module fails to load, the voice still plays dry
     try {
       await ctx.audioWorklet.addModule(reverbUrl);
@@ -240,9 +245,9 @@ export class AudioEngine {
     if (!this.node || !this.dist || !this.micIn) return;
     this.node.disconnect();
     this.node.connect(on ? this.micIn : this.dist.input);
-    if (this.node2) {
-      this.node2.disconnect();
-      this.node2.connect(on ? this.micIn : this.dist.input);
+    for (const x of this.extras) {
+      x.node.disconnect();
+      x.node.connect(on ? this.micIn : this.dist.input);
     }
   }
 
@@ -253,15 +258,16 @@ export class AudioEngine {
   /** End the sung note (open-ended gestures) with this tag. */
   release(tag: number): void {
     this.send({ type: "release", tag });
-    // the second voice shares the mouth: it gets the same gestures (silent outside Play)
-    this.node2?.port.postMessage({ type: "release", tag } satisfies ToWorklet);
+    // the other voices share the mouth: they get the same gestures (silent outside Play); a
+    // sleeping one would play them late on waking, so it doesn't
+    this.toAwake({ type: "release", tag });
   }
 
   /** Gestures planned on the main thread, times relative to arrival + lead (live playing). */
   scheduleGestures(gestures: import("../wasm/types.ts").Gesture[], lead = 0.006): void {
     const m: ToWorklet = { type: "schedule", gestures, segments: [], end: 0, id: ++this.speakId, replace: false, lead };
     this.send(m);
-    this.node2?.port.postMessage(m);
+    this.toAwake(m);
   }
 
   beatHit(id: string, note?: number, accent?: number): void {
@@ -275,42 +281,74 @@ export class AudioEngine {
   setBody(body: BodyMix): void {
     this.mirrorBody = body;
     this.send({ type: "body", body });
-    this.node2?.port.postMessage({ type: "body", body } satisfies ToWorklet);
+    this.toExtras({ type: "body", body });
   }
 
-  /** Turn the second voice on or off (created now, or when audio starts). */
-  setTwoVoices(on: boolean): void {
-    this.twoVoices = on;
-    if (!this.ctx) return;
-    if (on && !this.node2) this.createVoice2();
-    else if (!on && this.node2) {
-      this.node2.port.onmessage = null;
-      this.node2.disconnect();
-      this.node2 = null;
+  /** How many voices play (1 … 8): the extra ones are created now, or when audio starts. */
+  setVoices(n: number): void {
+    this.voiceCount = Math.max(1, Math.min(8, Math.round(n)));
+    this.syncVoices();
+  }
+
+  private syncVoices(): void {
+    const ctx = this.ctx, dist = this.dist;
+    if (!ctx || !dist) return;
+    const want = this.voiceCount - 1;
+    const os = this.voiceCount > 2 ? 1 : 0;
+    // a different airway for the extras: build them again
+    if (os !== this.extrasOs) {
+      this.removeExtras(0);
+      this.extrasOs = os;
+    }
+    this.removeExtras(want);
+    while (this.extras.length < want) {
+      const node = new AudioWorkletNode(ctx, "chimera", { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2], processorOptions: { module: chimeraModule(), oversample: os } });
+      const n = this.extras.length + 2;
+      node.port.onmessage = (e: MessageEvent<FromWorklet>) => {
+        if (e.data.type === "error") console.error(`voice ${n}:`, e.data.message);
+      };
+      const send = (m: ToWorklet) => node.port.postMessage(m);
+      // nothing reads its telemetry: skip the work
+      send({ type: "telemetry", enabled: false });
+      if (this.mirrorBody) send({ type: "body", body: this.mirrorBody });
+      send({ type: "artic", values: this.mirrorArtic, tipFree: this.mirrorTipFree });
+      send({ type: "source", values: this.mirrorSource });
+      send({ type: "gate", level: 0 });
+      // asleep until it gets a note
+      send({ type: "sleep", asleep: true });
+      node.connect(this.micOn && this.micIn ? this.micIn : dist.input);
+      this.extras.push({ node, asleep: true });
     }
   }
 
-  private createVoice2(): void {
-    const ctx = this.ctx, dist = this.dist;
-    if (!ctx || !dist || this.node2) return;
-    const node = new AudioWorkletNode(ctx, "chimera", { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2], processorOptions: { module: chimeraModule() } });
-    node.port.onmessage = (e: MessageEvent<FromWorklet>) => {
-      if (e.data.type === "error") console.error("voice 2:", e.data.message);
-    };
-    const send = (m: ToWorklet) => node.port.postMessage(m);
-    // nothing reads its telemetry: skip the work
-    send({ type: "telemetry", enabled: false });
-    if (this.mirrorBody) send({ type: "body", body: this.mirrorBody });
-    send({ type: "artic", values: this.mirrorArtic, tipFree: this.mirrorTipFree });
-    send({ type: "source", values: this.mirrorSource });
-    send({ type: "gate", level: 0 });
-    node.connect(this.micOn && this.micIn ? this.micIn : dist.input);
-    this.node2 = node;
+  /** Remove the extra voices beyond the first `keep`. */
+  private removeExtras(keep: number): void {
+    while (this.extras.length > keep) {
+      const x = this.extras.pop()!;
+      x.node.port.onmessage = null;
+      x.node.disconnect();
+    }
   }
 
-  /** The second voice's breath gate (0 shut … 1 open). */
-  gate2(level: number): void {
-    this.node2?.port.postMessage({ type: "gate", level } satisfies ToWorklet);
+  private toExtras(m: ToWorklet): void {
+    for (const x of this.extras) x.node.port.postMessage(m);
+  }
+
+  private toAwake(m: ToWorklet): void {
+    for (const x of this.extras) if (!x.asleep) x.node.port.postMessage(m);
+  }
+
+  /** Voice `voice`'s (1 … N-1: the extra ones) breath gate, 0 shut … 1 open. */
+  gateVoice(voice: number, level: number): void {
+    this.extras[voice - 1]?.node.port.postMessage({ type: "gate", level } satisfies ToWorklet);
+  }
+
+  /** Put an extra voice to sleep (no note: renders nothing) or wake it. */
+  sleepVoice(voice: number, asleep: boolean): void {
+    const x = this.extras[voice - 1];
+    if (!x || x.asleep === asleep) return;
+    x.asleep = asleep;
+    x.node.port.postMessage({ type: "sleep", asleep } satisfies ToWorklet);
   }
 
   gate(level: number): void {
@@ -391,9 +429,9 @@ export class AudioEngine {
    * than 60 Hz, and frame-rate steps would zipper. Drops the same keys from the frame's pending
    * batch, which would otherwise arrive later and undo these.
    */
-  setSourceNow(values: Partial<VoiceSource>, voice: 0 | 1 = 0): void {
-    if (voice === 1) {
-      this.node2?.port.postMessage({ type: "source", values } satisfies ToWorklet);
+  setSourceNow(values: Partial<VoiceSource>, voice = 0): void {
+    if (voice > 0) {
+      this.extras[voice - 1]?.node.port.postMessage({ type: "source", values } satisfies ToWorklet);
       return;
     }
     if (this.pendingSource) for (const k of Object.keys(values) as (keyof VoiceSource)[]) delete this.pendingSource[k];
@@ -413,7 +451,7 @@ export class AudioEngine {
       if (this.pendingArtic || this.pendingTipFree !== undefined) {
         const m: ToWorklet = { type: "artic", values: this.pendingArtic ?? {}, tipFree: this.pendingTipFree };
         this.send(m);
-        this.node2?.port.postMessage(m);
+        this.toExtras(m);
         this.mirrorArtic = { ...this.mirrorArtic, ...m.values };
         if (m.tipFree !== undefined) this.mirrorTipFree = m.tipFree;
         this.pendingArtic = null;
@@ -425,7 +463,7 @@ export class AudioEngine {
         const { f0: _f, pressure: _p, glide: _g, ...shared } = this.pendingSource;
         if (Object.keys(shared).length) {
           this.mirrorSource = { ...this.mirrorSource, ...shared };
-          this.node2?.port.postMessage({ type: "source", values: shared } satisfies ToWorklet);
+          this.toExtras({ type: "source", values: shared });
         }
         this.pendingSource = null;
       }

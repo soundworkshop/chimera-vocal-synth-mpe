@@ -25,15 +25,19 @@ interface Saved {
   reverb: ReverbSettings;
   distortion: DistortionSettings;
   /** two-voice MPE (a second engine; about twice the CPU) */
-  twoVoices: boolean;
+  /** how many voices play MPE notes (1, 2 or 8) */
+  polyphony: number;
 }
+/** the polyphony choices */
+export const POLYPHONY = [1, 2, 8];
+
 function loadSaved(): Saved {
   try {
     const raw = typeof localStorage !== "undefined" ? localStorage.getItem(SAVED_KEY) : null;
     const v = raw ? JSON.parse(raw) : {};
-    return { touch: { ...DEFAULT_TOUCH, ...v.touch }, reverb: { ...DEFAULT_REVERB, ...v.reverb }, distortion: { ...DEFAULT_DISTORTION, ...v.distortion }, twoVoices: v.twoVoices ?? true };
+    return { touch: { ...DEFAULT_TOUCH, ...v.touch }, reverb: { ...DEFAULT_REVERB, ...v.reverb }, distortion: { ...DEFAULT_DISTORTION, ...v.distortion }, polyphony: POLYPHONY.includes(v.polyphony) ? v.polyphony : v.twoVoices === false ? 1 : 2 };
   } catch {
-    return { touch: { ...DEFAULT_TOUCH }, reverb: { ...DEFAULT_REVERB }, distortion: { ...DEFAULT_DISTORTION }, twoVoices: true };
+    return { touch: { ...DEFAULT_TOUCH }, reverb: { ...DEFAULT_REVERB }, distortion: { ...DEFAULT_DISTORTION }, polyphony: 2 };
   }
 }
 function save(v: Saved): void {
@@ -47,7 +51,7 @@ const saved = loadSaved();
 // only stored until the audio starts (no engine call)
 engine.setReverb(saved.reverb);
 engine.setDistortion(saved.distortion);
-engine.setTwoVoices(saved.twoVoices);
+engine.setVoices(saved.polyphony);
 
 export type Mode = "play" | "speak" | "sing" | "bestiary" | "beatbox";
 
@@ -127,8 +131,8 @@ interface State {
   setReverb: (v: Partial<ReverbSettings>) => void;
   distortion: DistortionSettings;
   setDistortion: (v: Partial<DistortionSettings>) => void;
-  twoVoices: boolean;
-  setTwoVoices: (on: boolean) => void;
+  polyphony: number;
+  setPolyphony: (n: number) => void;
   setView: (v: Partial<ViewOptions>) => void;
 }
 
@@ -168,20 +172,47 @@ let mpeRestore: ReturnType<typeof setTimeout> | null = null;
 let mpeFrame = 0;
 let mpeF0 = 0;
 
-/** each voice's MPE channel (index 0: the main voice, 1: the second) */
+/** each voice's MPE channel (index 0: the main voice, 1…: the others) */
 let slots: (string | null)[] = [null];
-let gate2Open = false;
+/**
+ * The extra voices (1…): awake while they have a note, with the gate open; a voice without one
+ * is silent at pressure 0, and after a moment (its release rings out) shuts its gate and sleeps,
+ * costing nothing. The main voice (0) never sleeps.
+ */
+let awake: boolean[] = [];
+let sleepTimers: (ReturnType<typeof setTimeout> | undefined)[] = [];
+const SLEEP_AFTER = 400;
 
-function setGate2(open: boolean): void {
-  if (open === gate2Open) return;
-  gate2Open = open;
-  engine.gate2(open ? 1 : 0);
+function wake(i: number): void {
+  clearTimeout(sleepTimers[i]);
+  sleepTimers[i] = undefined;
+  if (awake[i]) return;
+  awake[i] = true;
+  engine.sleepVoice(i, false);
+  engine.gateVoice(i, 1);
 }
 
-/** Forget the voices' notes and close the second voice (mode switch, MIDI off). */
+function idle(i: number): void {
+  if (!awake[i] || sleepTimers[i]) return;
+  sleepTimers[i] = setTimeout(() => {
+    sleepTimers[i] = undefined;
+    awake[i] = false;
+    engine.gateVoice(i, 0);
+    engine.sleepVoice(i, true);
+  }, SLEEP_AFTER);
+}
+
+/** The voices were rebuilt (polyphony changed): all extras start asleep. */
+function forgetVoices(): void {
+  sleepTimers.forEach((t) => clearTimeout(t));
+  sleepTimers = [];
+  awake = [];
+}
+
+/** Forget the voices' notes; the extra ones fall asleep after their release (mode switch, MIDI off). */
 function resetMpe(): void {
   slots = slots.map(() => null);
-  setGate2(false);
+  for (let i = 1; i < awake.length; i++) idle(i);
   mpeLive.pressure = null;
   mpeLive.breath = 0;
 }
@@ -202,16 +233,21 @@ function applyMpe(voices: MpeVoice[], sendsPressure: boolean): void {
   }
   if (mpeRestore) clearTimeout(mpeRestore), (mpeRestore = null);
   mpeActive = true;
-  const n = s.twoVoices ? 2 : 1;
+  const n = s.polyphony;
   if (slots.length !== n) slots = Array.from({ length: n }, (_, i) => slots[i] ?? null);
   const playing = assignSlots(slots, voices);
   // the volume envelope (breath after the touch curve, 0..1): the louder voice's, as the two
   // share one mouth
   let env = 0;
   playing.forEach((v, i) => {
-    const voice = i as 0 | 1;
-    // a voice with no note: silent (its gate stays open, so the next note starts at once)
-    if (!v) return engine.setSourceNow({ pressure: 0, glide: MPE_GLIDE }, voice);
+    const voice = i;
+    // a voice with no note: silent (its gate stays open a moment, so a quick next note starts
+    // at once), then asleep
+    if (!v) {
+      if (i > 0) idle(i);
+      return engine.setSourceNow({ pressure: 0, glide: MPE_GLIDE }, voice);
+    }
+    if (i > 0) wake(i);
     // no pressure from this controller: the knob's breath, as before; pressure not yet sent for
     // this note (it follows the note-on): silent until it arrives
     const amount = v.pressure === null ? (sendsPressure ? 0 : 1) : touchToBreath(v.pressure, s.touch);
@@ -220,7 +256,6 @@ function applyMpe(voices: MpeVoice[], sendsPressure: boolean): void {
     engine.setSourceNow({ f0, glide: MPE_GLIDE, pressure: amount * s.source.pressure }, voice);
     if (i === 0) mpeF0 = f0;
   });
-  setGate2(n === 2);
   mpeLive.breath = env;
   const main = playing[0] ?? playing[1];
   mpeLive.pressure = main ? (main.pressure ?? (sendsPressure ? 0 : null)) : null;
@@ -233,7 +268,7 @@ function applyMpe(voices: MpeVoice[], sendsPressure: boolean): void {
 
 const saveAll = () => {
   const s = useStore.getState();
-  save({ touch: s.touch, reverb: s.reverb, distortion: s.distortion, twoVoices: s.twoVoices });
+  save({ touch: s.touch, reverb: s.reverb, distortion: s.distortion, polyphony: s.polyphony });
 };
 
 let startPromise: Promise<void> | null = null;
@@ -481,11 +516,13 @@ export const useStore = create<State>((set, get) => ({
     set((s) => ({ touch: { ...s.touch, ...v } }));
     saveAll();
   },
-  twoVoices: saved.twoVoices,
-  setTwoVoices: (on) => {
+  polyphony: saved.polyphony,
+  setPolyphony: (n) => {
     resetMpe();
-    set({ twoVoices: on });
-    engine.setTwoVoices(on);
+    if (!POLYPHONY.includes(n)) return;
+    set({ polyphony: n });
+    engine.setVoices(n);
+    forgetVoices();
     saveAll();
   },
   distortion: saved.distortion,

@@ -42,14 +42,18 @@ class ChimeraProcessor extends AudioWorkletProcessor {
   private readonly h: number;
   private failed = false;
   private telemetryOn = true;
+  /** a polyphony voice with no note: renders nothing until woken */
+  private asleep = false;
   private blocks = 0;
   private load = 0;
   private creature: CreatureInfo | null = null;
 
-  constructor(options: { processorOptions: { module: WebAssembly.Module } }) {
+  constructor(options: { processorOptions: { module: WebAssembly.Module; oversample?: number } }) {
     super();
     this.x = new WebAssembly.Instance(options.processorOptions.module, {}).exports as unknown as Exports;
-    this.h = this.x.engine_new(sampleRate);
+    // extra polyphony voices may ask for a lighter airway (0 or absent: the default)
+    const os = options.processorOptions.oversample ?? 0;
+    this.h = os && this.x.engine_new_os ? this.x.engine_new_os(sampleRate, os) : this.x.engine_new(sampleRate);
     this.port.onmessage = (e: MessageEvent<ToWorklet>) => {
       if (this.failed) return;
       try {
@@ -133,6 +137,9 @@ class ChimeraProcessor extends AudioWorkletProcessor {
       case "telemetry":
         this.telemetryOn = m.enabled;
         break;
+      case "sleep":
+        this.asleep = m.asleep;
+        break;
       case "schedule": {
         // planning happened on the main thread; the engine shifts the gestures onto its clock
         const n = writeGestures(this.mem, x.engine_records(h), m.gestures, MAX_GESTURES);
@@ -183,7 +190,8 @@ class ChimeraProcessor extends AudioWorkletProcessor {
     const out = outputs[0];
     if (!out || out.length === 0) return true;
     const ch0 = out[0];
-    if (this.failed) {
+    // a sleeping voice (polyphony, no note) costs nothing: silence, the engine untouched
+    if (this.failed || this.asleep) {
       for (const ch of out) ch.fill(0);
       return true;
     }

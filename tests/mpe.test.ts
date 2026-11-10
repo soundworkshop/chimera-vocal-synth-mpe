@@ -462,3 +462,18 @@ test("vowel sweep: quiet at one end, loud at the other, in between straight in l
   expect(sweepPoint(a, b, 0.5).F1).toBeCloseTo(Math.sqrt(340 * 720), 6);
   expect(sweepPoint(a, b, 2).F2).toBeCloseTo(1250, 6); // clamped
 });
+
+test("eight voices: eight held notes, one per voice; a ninth, higher note takes the lowest's voice", async () => {
+  const { assignSlots } = await import("../src/ui/voiceSlots.ts");
+  let serial = 0;
+  const v = (ch: number, note: number) => ({ id: `ch${ch}`, note, velocity: 100, bend: 0, pressure: 0.5, serial: ++serial });
+  const slots: (string | null)[] = Array(8).fill(null);
+  const held = [60, 64, 67, 71, 72, 76, 79, 83].map((n, i) => v(i + 2, n));
+  const got = assignSlots(slots, held).map((x) => x?.note);
+  expect(new Set(got).size).toBe(8);
+  expect(got.every((n) => n !== undefined)).toBe(true);
+  const ninth = v(10, 86);
+  const after = assignSlots(slots, [...held, ninth]).map((x) => x?.note);
+  expect(after).toContain(86);
+  expect(after).not.toContain(60);
+});

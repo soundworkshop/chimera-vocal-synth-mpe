@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { mpeLive, touchToBreath, useStore } from "../store.ts";
+import { mpeLive, POLYPHONY, touchToBreath, useStore } from "../store.ts";
 import { V } from "../colors.ts";
 import { DISTORTION_TYPES } from "../../audio/distortion.ts";
 import { micLive, useMic } from "../micWords.ts";
@@ -143,8 +143,8 @@ export function VoiceToggles() {
   const setSource = useStore((st) => st.setSource);
   const hold = useStore((st) => st.hold);
   const setHold = useStore((st) => st.setHold);
-  const two = useStore((st) => st.twoVoices);
-  const setTwo = useStore((st) => st.setTwoVoices);
+  const poly = useStore((st) => st.polyphony);
+  const setPoly = useStore((st) => st.setPolyphony);
   const micStatus = useMic((m) => m.status);
   const micProblem = useMic((m) => m.problem);
   const setMic = useMic((m) => m.setOn);
@@ -155,9 +155,14 @@ export function VoiceToggles() {
         {micStatus === "starting" ? "Mic words…" : micStatus === "denied" || micStatus === "error" ? "Mic words ⚠" : "Mic words"}
       </Chip>
       {micProblem && <span className="mic-problem" role="alert">{micProblem}</span>}
-      <Chip on={two} onClick={() => setTwo(!two)}>
-        2 voices
-      </Chip>
+      <span className="poly" role="radiogroup" aria-label="Polyphony: voices for MPE notes">
+        <span className="poly-label">Voices</span>
+        {POLYPHONY.map((n) => (
+          <Chip key={n} on={poly === n} toggle={false} role="radio" aria-checked={poly === n} onClick={() => setPoly(n)} title={n === 8 ? "Eight voices: the extra seven use a lighter airway, and voices without a note sleep" : `${n} voice${n > 1 ? "s" : ""}`}>
+            {n}
+          </Chip>
+        ))}
+      </span>
       <Chip on={hold} onClick={() => setHold(!hold)}>
         Hold breath
       </Chip>
