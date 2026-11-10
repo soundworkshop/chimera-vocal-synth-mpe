@@ -18,7 +18,7 @@ import { analyzeFormants, applyCalibration, calibrationProblem, fitCalibration, 
 import { useStore } from "./store.ts";
 import { getModel } from "./useModel.ts";
 import { sweepOwns } from "./vowelSweep.ts";
-import { duetOn, setVoice2Artic, useDuet } from "./duet.ts";
+import { duetOn, setVoice2Artic, voice2Body } from "./duet.ts";
 import type { VoiceModel } from "./analysis.ts";
 import { ENGLISH_VOWELS, formantTable as tableFor } from "./formantTable.ts";
 import { NEUTRAL, restTip } from "../wasm/engine.ts";
@@ -282,7 +282,7 @@ function tick(): void {
   // the duet's second voice says the same vowel in its own body: the target moved from voice 1's
   // vowel space into voice 2's (fitted on the two bodies' "ee", "ah", "oo")
   if (duetOn() && !sweepOwns(1)) {
-    const model2 = getModel(useDuet.getState().body2, ctx.sampleRate);
+    const model2 = getModel(voice2Body(), ctx.sampleRate);
     const table2 = formantTable(model2);
     table2.grow(2);
     if (table2.ready) {

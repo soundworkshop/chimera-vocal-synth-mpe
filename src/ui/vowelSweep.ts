@@ -17,7 +17,7 @@ import { mpeLive, useStore } from "./store.ts";
 import { getModel } from "./useModel.ts";
 import { formantTable } from "./formantTable.ts";
 import { sweepPoint, type SweepEnd } from "./sweepPoint.ts";
-import { duetOn, setVoice2Artic, useDuet } from "./duet.ts";
+import { duetOn, setVoice2Artic, settingsOf, voice2Body } from "./duet.ts";
 
 export type { SweepEnd };
 
@@ -79,12 +79,13 @@ function tick(): void {
   const ctx = engine.ctx;
   const duet = duetOn();
   for (let i = 0; i < 2; i++) {
-    const sw = s.voices[i];
+    // the right voice uses the left one's sweep while linked
+    const sw = s.voices[settingsOf(i)];
     if (!sw.on || st.mode !== "play" || !ctx || (i === 1 && !duet)) {
       sweepLive[i].at = null;
       continue;
     }
-    const body = i === 0 ? st.body : useDuet.getState().body2;
+    const body = i === 0 ? st.body : voice2Body();
     const table = formantTable(getModel(body, ctx.sampleRate), { neutral: NEUTRAL, restTip });
     table.grow(3);
     if (!table.ready) continue;
@@ -104,7 +105,7 @@ function tick(): void {
 
 /** Whether a voice's sweep owns its vowel right now (Mic words then leaves that voice alone). */
 export function sweepOwns(voice: number): boolean {
-  const sw = useSweep.getState().voices[voice];
+  const sw = useSweep.getState().voices[settingsOf(voice)];
   return !!sw?.on && (voice === 0 || duetOn());
 }
 

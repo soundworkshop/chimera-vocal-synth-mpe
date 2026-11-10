@@ -11,7 +11,7 @@ import { nearestVowel } from "./AnatomyView.tsx";
 import { Chip } from "./Screen.tsx";
 import { sweepLive, useSweep, type SweepEnd } from "../vowelSweep.ts";
 import { getModel } from "../useModel.ts";
-import { setVoice2Artic, useDuet, voice2Live } from "../duet.ts";
+import { setVoice2Artic, settingsOf, useDuet, voice2Live } from "../duet.ts";
 
 /**
  * Vowel map in the phonetician's orientation: F2 decreasing left→right, F1 increasing downward.
@@ -25,7 +25,7 @@ export function VowelMap(props: { voice?: number }) {
   const voice = props.voice ?? 0;
   const mainModel = useModel();
   /** this voice's body (voice 2's lives in the duet store) */
-  const bodyOf = (): BodyMix => (voice === 0 ? useStore.getState().body : (useDuet.getState().preview2 ?? useDuet.getState().body2));
+  const bodyOf = (): BodyMix => (settingsOf(voice) === 0 ? useStore.getState().body : (useDuet.getState().preview2 ?? useDuet.getState().body2));
   const model = {
     get current(): VoiceModel | null {
       return voice === 0 ? mainModel.current : getModel(bodyOf(), engine.ctx?.sampleRate ?? 48000);
@@ -90,7 +90,8 @@ export function VowelMap(props: { voice?: number }) {
       ipaGlyph(ctx, live.x + 20, live.y - 8, near, 17, V.green);
     }
     // the vowel sweep: its line, its two ends (quiet, loud), and where the volume has it now
-    const sw = useSweep.getState().voices[voice];
+    // the right voice's line is the left one's while linked (its dot is still its own)
+    const sw = useSweep.getState().voices[settingsOf(voice)];
     const at = sweepLive[voice]?.at;
     if (sw.on) {
       const pa = toXY(sw.a.F1, sw.a.F2, w, h), pb = toXY(sw.b.F1, sw.b.F2, w, h);
@@ -120,8 +121,8 @@ export function VowelMap(props: { voice?: number }) {
     const { F1, F2 } = fromXY(e.clientX - r.left, e.clientY - r.top, r.width, r.height);
     const sweep = useSweep.getState();
     // with the sweep on, drags move its ends (the volume places the vowel)
-    if (sweep.voices[voice].on) {
-      if (dragEnd.current) sweep.setEnd(voice, dragEnd.current, { F1, F2 });
+    if (sweep.voices[settingsOf(voice)].on) {
+      if (dragEnd.current) sweep.setEnd(settingsOf(voice), dragEnd.current, { F1, F2 });
       return;
     }
     const artic = m.articForFormants(F1, F2);
@@ -131,7 +132,7 @@ export function VowelMap(props: { voice?: number }) {
 
   /** the nearer end of the sweep's line (a press anywhere snaps it to the pointer) */
   const pickEnd = (e: React.PointerEvent): "a" | "b" | null => {
-    const sw = useSweep.getState().voices[voice];
+    const sw = useSweep.getState().voices[settingsOf(voice)];
     if (!sw.on) return null;
     const r = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
     const x = e.clientX - r.left, y = e.clientY - r.top;
@@ -164,7 +165,9 @@ export function VowelMap(props: { voice?: number }) {
 
 /** On/off for a voice's vowel sweep (its Vowels screen's tools). */
 export function SweepToggle(props: { voice?: number }) {
-  const voice = props.voice ?? 0;
+  // the right voice's toggle is the left one's while linked
+  const linked = useDuet((s) => s.linked);
+  const voice = (props.voice ?? 0) === 1 && linked ? 0 : (props.voice ?? 0);
   const on = useSweep((s) => s.voices[voice].on);
   const setOn = useSweep((s) => s.setOn);
   return (

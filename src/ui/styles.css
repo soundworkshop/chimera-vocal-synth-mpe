@@ -3123,3 +3123,9 @@ input[type="range"]::-moz-range-thumb {
     grid-template-areas: "head0" "head1" "vow0" "vow1" "center";
   }
 }
+
+/* the shared console's screens keep their places in it (their Play-wall grid areas don't exist
+   here: a missing area name made an implicit grid track, pushing the Voice screen off-screen) */
+.duet-center > .screen {
+  grid-area: auto;
+}

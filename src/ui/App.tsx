@@ -10,7 +10,7 @@ import { VoiceControls, VoiceToggles } from "./components/VoiceControls.tsx";
 import { MAX_SECONDS, startRecording, type Recording } from "../audio/recorder.ts";
 import { Keys } from "./components/Keys.tsx";
 import { Segmented, Toggle } from "./components/Controls.tsx";
-import { Screen } from "./components/Screen.tsx";
+import { Chip, Screen } from "./components/Screen.tsx";
 import { SpeakRight, speechInfo, speechSlots, speechWords } from "./components/SpeakPanel.tsx";
 import { BestiaryRight } from "./components/BestiaryPanel.tsx";
 import { CreatureView } from "./components/CreatureView.tsx";
@@ -321,12 +321,26 @@ function DuetWall() {
   );
 }
 
+/** Link: the right voice takes all the left one's settings (body, vowel sweep). */
+function LinkToggle() {
+  const linked = useDuet((s) => s.linked);
+  const setLinked = useDuet((s) => s.setLinked);
+  return (
+    <Chip on={linked} onClick={() => setLinked(!linked)} title={linked ? "Linked to the left voice: its body and vowel sweep. Click to give this voice its own again" : "Link this voice's settings (body, vowel sweep) to the left voice"}>
+      {linked ? "🔗 Linked" : "🔗 Link"}
+    </Chip>
+  );
+}
+
 /** One duet voice's 3D head (the left faces right, the right faces left) and its body triangle. */
 function DuetHead(props: { voice: number }) {
   const voice = props.voice;
   const body1 = useStore((s) => s.body);
-  const body2 = useDuet((s) => s.preview2 ?? s.body2);
+  const linked = useDuet((s) => s.linked);
+  const own2 = useDuet((s) => s.preview2 ?? s.body2);
   const view = useStore((s) => s.view);
+  // linked: the right voice has the left one's body
+  const body2 = linked ? body1 : own2;
   const body = voice === 0 ? body1 : body2;
   // voice 2's head draws from voice 2's own engine (its telemetry, its body's model)
   const feed: HeadFeed | undefined =
@@ -348,7 +362,16 @@ function DuetHead(props: { voice: number }) {
       title={voice === 0 ? "Left voice" : "Right voice"}
       sub={`${bodyLabel(body)} / 3D`}
       label={voice === 0 ? "Left voice, live vocal tract" : "Right voice, live vocal tract"}
-      tools={<BodyPad voice={voice} />}
+      tools={
+        voice === 1 ? (
+          <>
+            <LinkToggle />
+            <BodyPad voice={1} />
+          </>
+        ) : (
+          <BodyPad voice={0} />
+        )
+      }
     >
       <Suspense fallback={null}>
         <AnatomyView3D feed={feed} />

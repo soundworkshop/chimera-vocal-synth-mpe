@@ -13,13 +13,21 @@ import type { HumanArtic } from "../wasm/types.ts";
 
 const KEY = "chimera-duet";
 
-function load(): BodyMix {
+function load(): { body2: BodyMix; linked: boolean } {
   try {
     const raw = localStorage.getItem(KEY);
     const v = raw ? JSON.parse(raw) : {};
-    return v.body2 && typeof v.body2.female === "number" ? v.body2 : PRESETS.female;
+    return { body2: v.body2 && typeof v.body2.female === "number" ? v.body2 : PRESETS.female, linked: v.linked === true };
   } catch {
-    return PRESETS.female;
+    return { body2: PRESETS.female, linked: false };
+  }
+}
+
+function persist(s: { body2: BodyMix; linked: boolean }): void {
+  try {
+    localStorage.setItem(KEY, JSON.stringify({ body2: s.body2, linked: s.linked }));
+  } catch {
+    // storage blocked: kept until reload
   }
 }
 
@@ -28,28 +36,48 @@ interface DuetState {
   body2: BodyMix;
   /** a drag in progress: shown, not yet rebuilt into the voice */
   preview2: BodyMix | null;
+  /**
+   * Linked: the right voice takes the left one's settings (body, vowel sweep); either side's
+   * controls then edit both. Each voice still follows its own pressure along the shared line.
+   */
+  linked: boolean;
   setBody2: (b: BodyMix) => void;
   previewBody2: (b: BodyMix | null) => void;
+  setLinked: (on: boolean) => void;
 }
 
-export const useDuet = create<DuetState>((set) => {
-  const body2 = load();
-  engine.setVoice2Body(body2);
+export const useDuet = create<DuetState>((set, get) => {
+  const saved = load();
   return {
-    body2,
+    ...saved,
     preview2: null,
     setBody2: (b) => {
       set({ body2: b, preview2: null });
-      engine.setVoice2Body(b);
-      try {
-        localStorage.setItem(KEY, JSON.stringify({ body2: b }));
-      } catch {
-        // storage blocked: kept until reload
-      }
+      if (!get().linked) engine.setVoice2Body(b);
+      persist(get());
     },
     previewBody2: (b) => set({ preview2: b }),
+    setLinked: (on) => {
+      set({ linked: on });
+      engine.setVoice2Body(voice2Body());
+      persist(get());
+    },
   };
 });
+
+/** The right voice's body now: the left one's while linked, else its own. */
+export function voice2Body(): BodyMix {
+  const d = useDuet.getState();
+  return d.linked ? useStore.getState().body : d.body2;
+}
+
+/**
+ * Whose settings a voice's controls show and edit: the right voice's are the left one's while
+ * linked (0), else its own.
+ */
+export function settingsOf(voice: number): number {
+  return voice === 1 && useDuet.getState().linked ? 0 : voice;
+}
 
 /** Whether the duet is showing: Play mode with exactly two voices. */
 export function duetOn(): boolean {
@@ -66,6 +94,15 @@ export function setVoice2Artic(values: Partial<HumanArtic>, tipFree = true): voi
   engine.setVoice2Artic(values, tipFree);
 }
 
-// voice 2 has its own mouth exactly while the duet shows
+// voice 2 has its own mouth exactly while the duet shows; its body follows the left one's while
+// linked
+engine.setVoice2Body(voice2Body());
 engine.setOwnMouths(duetOn());
-useStore.subscribe(() => engine.setOwnMouths(duetOn()));
+let lastBody = useStore.getState().body;
+useStore.subscribe((s) => {
+  engine.setOwnMouths(duetOn());
+  if (s.body !== lastBody) {
+    lastBody = s.body;
+    if (useDuet.getState().linked) engine.setVoice2Body(s.body);
+  }
+});

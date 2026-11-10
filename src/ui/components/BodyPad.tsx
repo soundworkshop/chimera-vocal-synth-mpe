@@ -29,7 +29,9 @@ const Y = (v: number) => P + v * (H - 2 * P);
  */
 export function BodyPad(props: { voice?: number }) {
   // voice 1: the store's body (as always); voice 2: the duet's second body
-  const two = props.voice === 1;
+  // linked: the right voice's triangle is the left one's
+  const linked = useDuet((s) => s.linked);
+  const two = props.voice === 1 && !linked;
   const body1 = useStore((s) => s.body);
   const body2 = useDuet((s) => s.preview2 ?? s.body2);
   const body = two ? body2 : body1;
