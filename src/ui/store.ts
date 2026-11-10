@@ -9,6 +9,34 @@ import { BEAT_PRESETS, BASS_NOTE, beatReady, parseBeat, type BeatStep } from "..
 import { singNoteOn, singNoteOff, stopSinging, ensureDictionary } from "./singing.ts";
 import { stopSpeaking } from "./speech.ts";
 import { connectMidi, disconnectMidi, type MidiStatus, type MpeVoice } from "./midi.ts";
+import { DEFAULT_REVERB, type ReverbSettings } from "../audio/plateReverb.ts";
+import { DEFAULT_TOUCH, touchToBreath, type TouchCurve } from "./touch.ts";
+export { touchToBreath };
+
+/** the live controller, for the curve display: pressure 0..1, or null when nothing is held */
+export const mpeLive: { pressure: number | null } = { pressure: null };
+
+/** settings kept across visits (this browser only) */
+const SAVED_KEY = "chimera-mpe-settings";
+function loadSaved(): { touch: TouchCurve; reverb: ReverbSettings } {
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(SAVED_KEY) : null;
+    const v = raw ? JSON.parse(raw) : {};
+    return { touch: { ...DEFAULT_TOUCH, ...v.touch }, reverb: { ...DEFAULT_REVERB, ...v.reverb } };
+  } catch {
+    return { touch: { ...DEFAULT_TOUCH }, reverb: { ...DEFAULT_REVERB } };
+  }
+}
+function save(v: { touch: TouchCurve; reverb: ReverbSettings }): void {
+  try {
+    localStorage.setItem(SAVED_KEY, JSON.stringify(v));
+  } catch {
+    // private window or storage blocked: settings last until reload
+  }
+}
+const saved = loadSaved();
+// only stored until the audio starts (no engine call)
+engine.setReverb(saved.reverb);
 
 export type Mode = "play" | "speak" | "sing" | "bestiary" | "beatbox";
 
@@ -82,6 +110,10 @@ interface State {
   noteOff: (midi: number) => void;
   midi: { status: MidiStatus; inputs: string[] };
   setMidi: (on: boolean) => void;
+  touch: TouchCurve;
+  setTouch: (v: Partial<TouchCurve>) => void;
+  reverb: ReverbSettings;
+  setReverb: (v: Partial<ReverbSettings>) => void;
   setView: (v: Partial<ViewOptions>) => void;
 }
 
@@ -125,6 +157,7 @@ function applyMpe(voices: MpeVoice[], sendsPressure: boolean): void {
   const s = useStore.getState();
   if (s.mode !== "play") return;
   if (!voices.length) {
+    mpeLive.pressure = null;
     if (mpeActive && !mpeRestore)
       mpeRestore = setTimeout(() => {
         mpeRestore = null;
@@ -141,9 +174,10 @@ function applyMpe(voices: MpeVoice[], sendsPressure: boolean): void {
   for (const v of voices) if (v.note > top.note || (v.note === top.note && v.serial > top.serial)) top = v;
   // no pressure from this controller: the knob's breath, as before; pressure not yet sent for
   // this note (it follows the note-on): silent until it arrives
-  const amount = top.pressure ?? (sendsPressure ? 0 : 1);
+  const amount = top.pressure === null ? (sendsPressure ? 0 : 1) : touchToBreath(top.pressure, s.touch);
+  mpeLive.pressure = top.pressure ?? (sendsPressure ? 0 : null);
   mpeF0 = midiToHz(top.note + top.bend);
-  engine.setSource({ f0: mpeF0, glide: MPE_GLIDE, pressure: amount * s.source.pressure });
+  engine.setSourceNow({ f0: mpeF0, glide: MPE_GLIDE, pressure: amount * s.source.pressure });
   if (!mpeFrame)
     mpeFrame = requestAnimationFrame(() => {
       mpeFrame = 0;
@@ -389,6 +423,17 @@ export const useStore = create<State>((set, get) => ({
   },
   setView: (v) => set((s) => ({ view: { ...s.view, ...v } })),
   midi: { status: "off", inputs: [] },
+  touch: saved.touch,
+  setTouch: (v) => {
+    set((s) => ({ touch: { ...s.touch, ...v } }));
+    save({ touch: get().touch, reverb: get().reverb });
+  },
+  reverb: saved.reverb,
+  setReverb: (v) => {
+    set((s) => ({ reverb: { ...s.reverb, ...v } }));
+    engine.setReverb(v);
+    save({ touch: get().touch, reverb: get().reverb });
+  },
   setMidi: (on) => {
     const noteOff = (n: number) => get().noteOff(n);
     if (!on) {

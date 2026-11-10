@@ -3,6 +3,8 @@
  * parameter messages (at most one per animation frame per kind) and telemetry fan-out.
  */
 import workletUrl from "../worklet/processor.ts?worker&url";
+import reverbUrl from "./reverbWorklet.ts?worker&url";
+import { DEFAULT_REVERB, type ReverbSettings } from "./plateReverb.ts";
 import { chimeraModule } from "../wasm/chimera.ts";
 import type { ToWorklet, FromWorklet, TelemetryMessage, PlannedMessage, CreatureTelemetryMessage } from "../worklet/protocol.ts";
 import type { BodyMix } from "../wasm/types.ts";
@@ -20,6 +22,9 @@ export class AudioEngine {
   /** long time-domain window for the waveform scope */
   analyserScope: AnalyserNode | null = null;
   private master: GainNode | null = null;
+  /** plate reverb after the master (the analysers read the dry voice) */
+  private reverb: AudioWorkletNode | null = null;
+  private reverbSettings: ReverbSettings = { ...DEFAULT_REVERB };
   /** "close mic" chain: proximity bass, presence, compression (beatboxers cup the mic) */
   private micIn: AudioNode | null = null;
   private micOn = false;
@@ -100,7 +105,17 @@ export class AudioEngine {
     shelf.connect(presence).connect(comp).connect(makeup).connect(master);
     this.micIn = shelf;
     node.connect(this.micOn ? shelf : master);
-    master.connect(ctx.destination);
+    // the reverb is optional: if its module fails to load, the voice still plays dry
+    try {
+      await ctx.audioWorklet.addModule(reverbUrl);
+      this.reverb = new AudioWorkletNode(ctx, "chimera-plate", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+      this.applyReverb(0);
+    } catch (e) {
+      console.error("reverb:", e);
+      this.reverb = null;
+    }
+    if (this.reverb) master.connect(this.reverb).connect(ctx.destination);
+    else master.connect(ctx.destination);
     master.connect(analyser);
     master.connect(fast);
     master.connect(scope);
@@ -223,6 +238,32 @@ export class AudioEngine {
     this.pendingArtic = { ...(this.pendingArtic ?? {}), ...values };
     if (tipFree !== undefined) this.pendingTipFree = tipFree;
     this.scheduleFlush();
+  }
+
+  /** Reverb knobs (each 0..1); kept for when audio starts. */
+  setReverb(values: Partial<ReverbSettings>): void {
+    this.reverbSettings = { ...this.reverbSettings, ...values };
+    this.applyReverb(0.03);
+  }
+
+  private applyReverb(smooth: number): void {
+    if (!this.reverb || !this.ctx) return;
+    for (const [k, v] of Object.entries(this.reverbSettings)) {
+      const p = this.reverb.parameters.get(k);
+      if (!p) continue;
+      if (smooth > 0) p.setTargetAtTime(v, this.ctx.currentTime, smooth);
+      else p.value = v;
+    }
+  }
+
+  /**
+   * Sent now, not at the next frame: a live controller (MPE pitch bend, pressure) moves faster
+   * than 60 Hz, and frame-rate steps would zipper. Drops the same keys from the frame's pending
+   * batch, which would otherwise arrive later and undo these.
+   */
+  setSourceNow(values: Partial<VoiceSource>): void {
+    if (this.pendingSource) for (const k of Object.keys(values) as (keyof VoiceSource)[]) delete this.pendingSource[k];
+    this.send({ type: "source", values });
   }
 
   setSource(values: Partial<VoiceSource>): void {

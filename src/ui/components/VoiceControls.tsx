@@ -1,4 +1,6 @@
-import { useStore } from "../store.ts";
+import { useEffect, useRef } from "react";
+import { mpeLive, touchToBreath, useStore } from "../store.ts";
+import { V } from "../colors.ts";
 import { EncoderPages, type EncoderPage } from "./Encoder.tsx";
 import { Chip } from "./Screen.tsx";
 
@@ -21,6 +23,10 @@ export function VoiceControls() {
   const setSource = useStore((st) => st.setSource);
   const a = useStore((st) => st.artic);
   const setArtic = useStore((st) => st.setArtic);
+  const t = useStore((st) => st.touch);
+  const setTouch = useStore((st) => st.setTouch);
+  const r = useStore((st) => st.reverb);
+  const setReverb = useStore((st) => st.setReverb);
   const pages: EncoderPage[] = [
     {
       name: "Voice",
@@ -43,6 +49,25 @@ export function VoiceControls() {
     {
       name: "Pitch",
       encoders: [{ label: "Glide", value: s.glide, min: 0.005, max: 0.6, log: true, onChange: (v) => setSource({ glide: v }), format: (v) => ({ value: (v * 1000).toFixed(0), unit: "ms" }) }],
+    },
+    {
+      // MPE pressure → breath (see touchToBreath); the graph shows the curve and the live touch
+      name: "Touch",
+      encoders: [
+        { label: "Start", value: t.start, min: 0, max: 0.9, onChange: (v) => setTouch({ start: v }), format: pct },
+        { label: "Curve", value: t.curve, min: 0.3, max: 3, log: true, onChange: (v) => setTouch({ curve: v }), format: (v) => ({ value: v.toFixed(2), unit: v < 0.95 ? "fast rise" : v > 1.05 ? "slow rise" : "linear" }) },
+        { label: "Floor", value: t.floor, min: 0, max: 0.3, onChange: (v) => setTouch({ floor: v }), format: pct },
+      ],
+      panel: <TouchGraph />,
+    },
+    {
+      name: "Reverb",
+      encoders: [
+        { label: "Mix", value: r.mix, min: 0, max: 1, onChange: (v) => setReverb({ mix: v }), format: pct },
+        { label: "Decay", value: r.time, min: 0, max: 1, onChange: (v) => setReverb({ time: v }), format: pct },
+        { label: "Tone", value: r.tone, min: 0, max: 1, onChange: (v) => setReverb({ tone: v }), format: pct },
+        { label: "Diffuse", value: r.diffusion, min: 0, max: 1, onChange: (v) => setReverb({ diffusion: v }), format: pct },
+      ],
     },
     {
       name: "Mouth",
@@ -89,4 +114,56 @@ export function VoiceToggles() {
       </Chip>
     </>
   );
+}
+
+/**
+ * The touch curve: controller pressure (across) to breath (up, as a share of the Breath knob),
+ * with a dot where the highest held note's pressure is now.
+ */
+function TouchGraph() {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const touch = useStore((st) => st.touch);
+  useEffect(() => {
+    const cv = ref.current;
+    if (!cv) return;
+    let raf = 0;
+    const draw = () => {
+      raf = requestAnimationFrame(draw);
+      const dpr = window.devicePixelRatio || 1;
+      const w = cv.clientWidth, h = cv.clientHeight;
+      if (!w || !h) return;
+      if (cv.width !== Math.round(w * dpr)) cv.width = Math.round(w * dpr);
+      if (cv.height !== Math.round(h * dpr)) cv.height = Math.round(h * dpr);
+      const ctx = cv.getContext("2d");
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      const pad = 4;
+      const X = (p: number) => pad + p * (w - 2 * pad);
+      const Y = (b: number) => h - pad - b * (h - 2 * pad);
+      ctx.strokeStyle = V.blueDim;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(pad, pad, w - 2 * pad, h - 2 * pad);
+      ctx.strokeStyle = V.amber;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i <= 120; i++) {
+        const p = i / 120;
+        const b = touchToBreath(p, touch);
+        if (i === 0) ctx.moveTo(X(p), Y(b));
+        else ctx.lineTo(X(p), Y(b));
+      }
+      ctx.stroke();
+      const p = mpeLive.pressure;
+      if (p !== null) {
+        ctx.fillStyle = V.green;
+        ctx.beginPath();
+        ctx.arc(X(p), Y(touchToBreath(p, touch)), 4, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+    };
+    draw();
+    return () => cancelAnimationFrame(raf);
+  }, [touch]);
+  return <canvas ref={ref} className="touch-graph" role="img" aria-label="Touch curve: pressure to breath" />;
 }
