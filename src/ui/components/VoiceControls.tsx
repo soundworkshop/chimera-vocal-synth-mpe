@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { mpeLive, touchToBreath, useStore } from "../store.ts";
 import { V } from "../colors.ts";
+import { micLive, useMic } from "../micWords.ts";
 import { EncoderPages, type EncoderPage } from "./Encoder.tsx";
 import { Chip } from "./Screen.tsx";
 
@@ -27,6 +28,7 @@ export function VoiceControls() {
   const setTouch = useStore((st) => st.setTouch);
   const d = useStore((st) => st.distortion);
   const setDistortion = useStore((st) => st.setDistortion);
+  const mic = useMic();
   const r = useStore((st) => st.reverb);
   const setReverb = useStore((st) => st.setReverb);
   const pages: EncoderPage[] = [
@@ -71,6 +73,15 @@ export function VoiceControls() {
         { label: "Mix", value: d.mix, min: 0, max: 1, onChange: (v) => setDistortion({ mix: v }), format: pct },
         { label: "Level", value: d.level, min: 0, max: 1, onChange: (v) => setDistortion({ level: v }), format: (v) => ({ value: v <= 0.001 ? "−∞" : (20 * Math.log10(2 * v)).toFixed(1), unit: "dB" }) },
       ],
+    },
+    {
+      // the performer's vowels shape the mouth (micWords.ts)
+      name: "Mic",
+      encoders: [
+        { label: "Gate", value: mic.gate, min: -80, max: -20, onChange: (v) => mic.set({ gate: v }), format: (v) => ({ value: v.toFixed(0), unit: "dB" }) },
+        { label: "Smooth", value: mic.smooth, min: 5, max: 200, log: true, onChange: (v) => mic.set({ smooth: v }), format: (v) => ({ value: v.toFixed(0), unit: "ms" }) },
+      ],
+      panel: <MicPanel />,
     },
     {
       name: "Reverb",
@@ -118,8 +129,14 @@ export function VoiceToggles() {
   const setHold = useStore((st) => st.setHold);
   const two = useStore((st) => st.twoVoices);
   const setTwo = useStore((st) => st.setTwoVoices);
+  const micStatus = useMic((m) => m.status);
+  const setMic = useMic((m) => m.setOn);
+  const micOn = micStatus === "on" || micStatus === "starting";
   return (
     <>
+      <Chip on={micOn} onClick={() => setMic(!micOn)}>
+        Mic words
+      </Chip>
       <Chip on={two} onClick={() => setTwo(!two)}>
         2 voices
       </Chip>
@@ -183,4 +200,61 @@ function TouchGraph() {
     return () => cancelAnimationFrame(raf);
   }, [touch]);
   return <canvas ref={ref} className="touch-graph" role="img" aria-label="Touch curve: pressure to breath" />;
+}
+
+const MIC_STATUS: Record<string, string> = { off: "Mic off: turn on Mic words", starting: "Asking for the mic…", denied: "Mic blocked by the browser", error: "Mic didn't start" };
+
+/**
+ * The mic's level against the gate, the calibration (and its prompts), and the input choice.
+ */
+function MicPanel() {
+  const m = useMic();
+  const meter = useRef<HTMLDivElement>(null);
+  const gateRef = useRef(m.gate);
+  gateRef.current = m.gate;
+  useEffect(() => {
+    let raf = 0;
+    const draw = () => {
+      raf = requestAnimationFrame(draw);
+      const el = meter.current;
+      if (!el) return;
+      const u = Math.min(1, Math.max(0, (micLive.db + 80) / 70));
+      el.style.setProperty("--level", String(u));
+      el.style.setProperty("--gate", String(Math.min(1, Math.max(0, (gateRef.current + 80) / 70))));
+      el.classList.toggle("over", micLive.active);
+    };
+    draw();
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  const on = m.status === "on";
+  return (
+    <div className="mic-panel">
+      <div className="mic-status">{m.prompt ?? (on ? (m.calibrated ? "Listening" : "Listening: calibrate for your voice") : MIC_STATUS[m.status])}</div>
+      <div className="mic-meter" ref={meter} aria-hidden="true">
+        <span className="mic-meter-level" />
+        <span className="mic-meter-gate" />
+      </div>
+      <div className="mic-actions">
+        {m.prompt ? (
+          <button type="button" className="mic-btn" onClick={m.cancelCalibration}>
+            Cancel
+          </button>
+        ) : (
+          <button type="button" className="mic-btn" disabled={!on} onClick={m.calibrate} title="Say ee, ah and oo so the mouth follows your voice">
+            Calibrate
+          </button>
+        )}
+        {m.inputs.length > 1 && (
+          <select className="mic-input" value={m.deviceId} onChange={(e) => m.set({ deviceId: e.target.value })} aria-label="Microphone">
+            <option value="">System default</option>
+            {m.inputs.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+    </div>
+  );
 }

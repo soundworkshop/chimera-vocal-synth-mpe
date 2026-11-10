@@ -1594,6 +1594,79 @@ button.ghost:hover,
   padding: 6px 4px;
 }
 
+.mic-panel {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.mic-status {
+  min-height: 2.4em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.mic-meter {
+  position: relative;
+  height: 8px;
+  border: 1px solid var(--blue-dim);
+  --level: 0;
+  --gate: 0.5;
+}
+
+.mic-meter-level {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--level) * 100%);
+  background: var(--blue-mid);
+}
+
+.mic-meter.over .mic-meter-level {
+  background: var(--green);
+}
+
+.mic-meter-gate {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  left: calc(var(--gate) * 100%);
+  width: 2px;
+  background: var(--amber);
+}
+
+.mic-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.mic-btn,
+.mic-input {
+  min-width: 0;
+  max-width: 100%;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--blue-mid);
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.mic-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.mic-input {
+  flex: 1;
+}
+
 .touch-graph {
   display: block;
   width: 100%;

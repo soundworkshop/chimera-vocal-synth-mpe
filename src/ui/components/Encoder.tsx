@@ -98,7 +98,7 @@ export function Encoder(props: EncoderSpec & { slot: number }) {
 export interface EncoderPage {
   name: string;
   encoders: EncoderSpec[];
-  /** shown in the first free slot (e.g. a graph of what the encoders shape) */
+  /** fills the free slots after the encoders (e.g. a graph of what the encoders shape) */
   panel?: ReactNode;
 }
 
@@ -122,7 +122,7 @@ export function EncoderPages(props: { pages: EncoderPage[]; footer?: ReactNode; 
         </div>
       )}
       <div className={`enc-row cols-${cols}`} role="group" aria-label={p.name}>
-        {Array.from({ length: cols }, (_, i) => i).map((i) => (p.encoders[i] ? <Encoder key={`${p.name}-${p.encoders[i].label}`} {...p.encoders[i]} slot={i} /> : p.panel && i === p.encoders.length ? <div key={`panel-${p.name}`} className="encoder enc-panel">{p.panel}</div> : <div key={`empty-${i}`} className="encoder empty" aria-hidden="true" />))}
+        {Array.from({ length: cols }, (_, i) => i).map((i) => (p.encoders[i] ? <Encoder key={`${p.name}-${p.encoders[i].label}`} {...p.encoders[i]} slot={i} /> : p.panel && i === p.encoders.length ? <div key={`panel-${p.name}`} className="encoder enc-panel" style={{ gridColumn: `span ${cols - p.encoders.length}` }}>{p.panel}</div> : p.panel && i > p.encoders.length ? null : <div key={`empty-${i}`} className="encoder empty" aria-hidden="true" />))}
       </div>
       {props.footer && <div className="enc-footer">{props.footer}</div>}
     </div>

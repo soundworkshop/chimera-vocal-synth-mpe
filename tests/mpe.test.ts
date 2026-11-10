@@ -143,3 +143,53 @@ test("two voices: each note keeps its voice, high-note priority when both are bu
   expect(notes(assignSlots(one, [a, b]))).toEqual([67]);
   expect(notes(assignSlots(one, [a]))).toEqual([60]);
 });
+
+/** a vowel: pulses (voiced, tilted −6 dB/oct like a real voice) or noise (whisper) through four resonances */
+function synthVowel(F: number[], f0: number, sr: number, n = 2048, noiseSeed = 7): Float32Array {
+  const len = n + 4000;
+  let x = new Float64Array(len);
+  let seed = noiseSeed;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
+  for (let i = 0; i < len; i++) x[i] = f0 ? (i % Math.round(sr / f0) === 0 ? 1 : 0) : rnd() * 0.1;
+  if (f0) for (let i = 0, y = 0; i < len; i++) x[i] = y = x[i] + 0.987 * y;
+  [80, 100, 150, 200].forEach((bw, k) => {
+    const r = Math.exp((-Math.PI * bw) / sr), c = 2 * r * Math.cos((2 * Math.PI * F[k]) / sr);
+    const y = new Float64Array(len);
+    for (let i = 0; i < len; i++) y[i] = x[i] + c * (i > 0 ? y[i - 1] : 0) - r * r * (i > 1 ? y[i - 2] : 0);
+    x = y;
+  });
+  const tail = x.slice(len - n);
+  const peak = tail.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  return Float32Array.from(tail, (v) => (v / peak) * 0.3);
+}
+
+test("formant tracker: F1/F2 within 12% voiced (110, 220 Hz), 20% whispered", async () => {
+  const { analyzeFormants } = await import("../src/audio/formants.ts");
+  const vowels: number[][] = [[300, 2250, 3000, 3600], [730, 1100, 2450, 3500], [320, 870, 2250, 3400], [550, 1800, 2500, 3500], [480, 900, 2500, 3500]];
+  for (const sr of [44100, 48000])
+    for (const F of vowels)
+      for (const f0 of [0, 110, 220]) {
+        // a whisper's single frame is noisy: average a few (the app smooths over frames too)
+        const runs = f0 ? [7] : [7, 11, 13, 17, 19, 23, 29, 31];
+        const rs = runs.map((seed) => analyzeFormants(synthVowel(F, f0, sr, 2048, seed), sr));
+        const r = { f1: rs.reduce((s, v) => s + v.f1, 0) / rs.length, f2: rs.reduce((s, v) => s + v.f2, 0) / rs.length };
+        // a whispered "oo" reads F1 ~16% high (whispers do raise F1); it is a calibration vowel, so
+        // the fit maps it back
+        const tol = f0 ? 0.12 : 0.2;
+        expect(Math.abs(r.f1 - F[0]) / F[0]).toBeLessThan(tol);
+        expect(Math.abs(r.f2 - F[1]) / F[1]).toBeLessThan(tol);
+      }
+});
+
+test("formant calibration: maps a speaker's corner vowels onto the model's", async () => {
+  const { fitCalibration, applyCalibration } = await import("../src/audio/formants.ts");
+  const model = [{ f1: 337, f2: 2225 }, { f1: 731, f2: 1337 }, { f1: 378, f2: 997 }];
+  // a speaker 15% higher across the board
+  const user = model.map((m) => ({ f1: m.f1 * 1.15, f2: m.f2 * 1.15 }));
+  const c = fitCalibration(user, model);
+  for (let i = 0; i < 3; i++) {
+    const m = applyCalibration(user[i].f1, user[i].f2, c);
+    expect(m.f1).toBeCloseTo(model[i].f1, 0);
+    expect(m.f2).toBeCloseTo(model[i].f2, 0);
+  }
+});
