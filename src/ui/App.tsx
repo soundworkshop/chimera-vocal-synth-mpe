@@ -5,7 +5,7 @@ import { AnatomyView } from "./components/AnatomyView.tsx";
 import { TubeView } from "./components/TubeView.tsx";
 import { Stroboscope } from "./components/Stroboscope.tsx";
 import { SpectrumView } from "./components/SpectrumView.tsx";
-import { VowelMap } from "./components/VowelMap.tsx";
+import { SweepToggle, VowelMap } from "./components/VowelMap.tsx";
 import { VoiceControls, VoiceToggles } from "./components/VoiceControls.tsx";
 import { MAX_SECONDS, startRecording, type Recording } from "../audio/recorder.ts";
 import { Keys } from "./components/Keys.tsx";
@@ -246,7 +246,7 @@ function PlayRight() {
       <Screen className="s-spec" title="Spectrum" sub="Resonances">
         <SpectrumView />
       </Screen>
-      <Screen className="s-vowels" title="Vowels" sub="F1 / F2">
+      <Screen className="s-vowels" title="Vowels" sub="F1 / F2" tools={<SweepToggle />}>
         <VowelMap />
       </Screen>
       <Screen className="s-voice" title="Voice" tools={<VoiceToggles />}>

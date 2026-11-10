@@ -8,6 +8,8 @@ import { VoiceModel } from "../analysis.ts";
 import { TEXT, V } from "../colors.ts";
 import { beamPts, handle, ipaGlyph, label, seg, type Pt } from "../render/vector.ts";
 import { nearestVowel } from "./AnatomyView.tsx";
+import { Chip } from "./Screen.tsx";
+import { sweepLive, useSweep, type SweepEnd } from "../vowelSweep.ts";
 
 /**
  * Vowel map in the phonetician's orientation: F2 decreasing left→right, F1 increasing downward.
@@ -17,6 +19,8 @@ import { nearestVowel } from "./AnatomyView.tsx";
 export function VowelMap() {
   const model = useModel();
   const dragging = useRef(false);
+  /** which sweep end is being dragged, if any */
+  const dragEnd = useRef<"a" | "b" | null>(null);
   const range = () => {
     const b = useStore.getState().body;
     const at = (male: number, female: number, child: number) => blendLog(b, { male, female, child });
@@ -70,6 +74,25 @@ export function VowelMap() {
       handle(ctx, live.x, live.y, V.green, 8);
       ipaGlyph(ctx, live.x + 20, live.y - 8, near, 17, V.green);
     }
+    // the vowel sweep: its line, its two ends (quiet, loud), and where the volume has it now
+    const sw = useSweep.getState();
+    if (sw.on) {
+      const pa = toXY(sw.a.F1, sw.a.F2, w, h), pb = toXY(sw.b.F1, sw.b.F2, w, h);
+      seg(ctx, pa.x, pa.y, pb.x, pb.y, V.amber, 1.5, { alpha: 0.9 });
+      handle(ctx, pa.x, pa.y, V.amber, 7);
+      handle(ctx, pb.x, pb.y, V.amber, 7);
+      label(ctx, "QUIET", pa.x, pa.y + 18, { size: 9, color: V.amber, align: "center", ls: 0.1 });
+      label(ctx, "LOUD", pb.x, pb.y + 18, { size: 9, color: V.amber, align: "center", ls: 0.1 });
+      if (sweepLive.at) {
+        const p = toXY(sweepLive.at.F1, sweepLive.at.F2, w, h);
+        ctx.save();
+        ctx.fillStyle = V.amber;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3.5, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
     label(ctx, "F2", w - 6, h - 5, { size: 9, color: TEXT.secondary, align: "right", ls: 0.1 });
     label(ctx, "F1", 4, h - 5, { size: 9, color: TEXT.secondary, ls: 0.1 });
   });
@@ -79,7 +102,27 @@ export function VowelMap() {
     if (!m) return;
     const r = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
     const { F1, F2 } = fromXY(e.clientX - r.left, e.clientY - r.top, r.width, r.height);
+    const sw = useSweep.getState();
+    // with the sweep on, drags move its ends (the volume places the vowel)
+    if (sw.on) {
+      if (dragEnd.current) sw.setEnd(dragEnd.current, { F1, F2 });
+      return;
+    }
     useStore.getState().setArtic(m.articForFormants(F1, F2), true);
+  };
+
+  /** the sweep end under the pointer (within 18 px), else the nearer one */
+  const pickEnd = (e: React.PointerEvent): "a" | "b" | null => {
+    const sw = useSweep.getState();
+    if (!sw.on) return null;
+    const r = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    const d = (end: SweepEnd) => {
+      const p = toXY(end.F1, end.F2, r.width, r.height);
+      return Math.hypot(p.x - x, p.y - y);
+    };
+    const da = d(sw.a), db = d(sw.b);
+    return da <= db ? (da < 18 ? "a" : null) : db < 18 ? "b" : null;
   };
 
   return (
@@ -87,16 +130,29 @@ export function VowelMap() {
       ref={ref}
       className="vowel-map"
       onPointerDown={(e) => {
+        dragEnd.current = pickEnd(e);
+        if (useSweep.getState().on && !dragEnd.current) return;
         dragging.current = true;
         (e.target as Element).setPointerCapture(e.pointerId);
         apply(e);
       }}
       onPointerMove={(e) => dragging.current && apply(e)}
-      onPointerUp={() => (dragging.current = false)}
-      onPointerCancel={() => (dragging.current = false)}
+      onPointerUp={() => ((dragging.current = false), (dragEnd.current = null))}
+      onPointerCancel={() => ((dragging.current = false), (dragEnd.current = null))}
       aria-label="Vowel map. Drag to morph between vowels."
       role="slider"
       aria-valuetext="vowel position"
     />
+  );
+}
+
+/** On/off for the vowel sweep (the Vowels screen's tools). */
+export function SweepToggle() {
+  const on = useSweep((s) => s.on);
+  const setOn = useSweep((s) => s.setOn);
+  return (
+    <Chip on={on} onClick={() => setOn(!on)} title="The vowel moves along a line with the volume: drag its quiet and loud ends">
+      Sweep
+    </Chip>
   );
 }

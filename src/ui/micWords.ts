@@ -17,6 +17,7 @@ import { hissSlice, stopGestures } from "./consonantGestures.ts";
 import { analyzeFormants, applyCalibration, calibrationProblem, fitCalibration, FormantFollower, IDENTITY_CALIBRATION, median, type FormantCalibration } from "../audio/formants.ts";
 import { useStore } from "./store.ts";
 import { getModel } from "./useModel.ts";
+import { useSweep } from "./vowelSweep.ts";
 import { ENGLISH_VOWELS, formantTable as tableFor } from "./formantTable.ts";
 import { NEUTRAL, restTip } from "../wasm/engine.ts";
 
@@ -273,8 +274,9 @@ function tick(): void {
   }
   micLive.aim = near;
   const table = formantTable(model);
-  // until the table's vowels are measured (the first frame or two), hold still
-  if (!table.ready) return;
+  // until the table's vowels are measured (the first frame or two), hold still; while the
+  // vowel sweep is on, it owns the vowel (the consonants above still play)
+  if (!table.ready || useSweep.getState().on) return;
   st.setArtic(table.lookup(t.f1, t.f2), true);
 }
 

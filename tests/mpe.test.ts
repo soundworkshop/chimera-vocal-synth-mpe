@@ -452,3 +452,13 @@ test("distortion types: all clean at drive 0; hard flattens, fold folds, all bou
   const mid = shapeCurve(0.5, "fold");
   expect(Math.max(...mid)).toBeCloseTo(1, 2);
 });
+
+test("vowel sweep: quiet at one end, loud at the other, in between straight in log Hz", async () => {
+  const { sweepPoint } = await import("../src/ui/sweepPoint.ts");
+  const a = { F1: 340, F2: 900 }, b = { F1: 720, F2: 1250 };
+  expect(sweepPoint(a, b, 0).F1).toBeCloseTo(340, 6);
+  expect(sweepPoint(a, b, 0).F2).toBeCloseTo(900, 6);
+  expect(sweepPoint(a, b, 1).F1).toBeCloseTo(720, 6);
+  expect(sweepPoint(a, b, 0.5).F1).toBeCloseTo(Math.sqrt(340 * 720), 6);
+  expect(sweepPoint(a, b, 2).F2).toBeCloseTo(1250, 6); // clamped
+});
